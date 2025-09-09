@@ -41,3 +41,19 @@ sudo apt install -y \
 
 ### 加载驱动
 - ip link set dev eth0 xdp obj xdp_accept.o sec xdp
+- 
+  ```
+  2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdp qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 52:54:00:cc:bd:e1 brd ff:ff:ff:ff:ff:ff
+    prog/xdp id 374 name xdp_firewall tag 548a4000dd379a20 jited 
+    altname enp0s5
+    altname ens5
+  ```
+
+## 如何使用
+### 调试日志
+1. 程序中打印
+  - bpf_trace_printk("UDP Echo: port %d\n", sizeof("UDP Echo: port %d\n"), UDP_ECHO_PORT);
+  - 
+2. 查看日志
+  - cat /sys/kernel/debug/tracing/trace_pipe
