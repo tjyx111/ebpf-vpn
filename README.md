@@ -37,10 +37,10 @@ sudo apt install -y \
   ```
 
 ### 卸载驱动
-- ip link set dev eth0 xdp off
+- ip link set dev ens34 xdp off
 
 ### 加载驱动
-- ip link set dev eth0 xdp obj xdp_accept.o sec xdp
+- ip link set dev ens34 xdp obj xdp_accept.o sec xdp
 - 
   ```
   2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdp qdisc mq state UP mode DEFAULT group default qlen 1000

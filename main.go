@@ -9,11 +9,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcapgo"
 )
 
 type PacketInfo struct {
@@ -22,6 +27,17 @@ type PacketInfo struct {
 	SrcPort uint16
 	DstPort uint16
 	Length  uint16
+}
+
+func setTraceFlag(configMap *ebpf.Map) error {
+	key := uint32(1)   // key_trace
+	value := uint32(1) // 打开 trace
+	return configMap.Update(&key, &value, ebpf.UpdateAny)
+}
+
+// 转换 IP 为 uint32（网络字节序）
+func ipToUint32(ip string) uint32 {
+	return binary.BigEndian.Uint32(net.ParseIP(ip).To4())
 }
 
 func txMonitor() {
@@ -108,8 +124,20 @@ type icmpEvent struct {
 	Dst uint32
 }
 
-func xdpMonitor() {
+type TraceEvent struct {
+	PktLen     uint32
+	PktRealLen uint32
+	Raw        [1500]byte
+	XdpAction  uint32
+}
 
+type FilterRule struct {
+	SrcIP    uint32
+	DstIP    uint32
+	SrcPort  uint16
+	DstPort  uint16
+	Protocol uint8
+	_        [3]byte // 填充对齐，保证结构体大小与 C 端一致
 }
 
 func main() {
@@ -125,7 +153,7 @@ func main() {
 	defer coll.Close()
 
 	// 获取网卡接口
-	iface, err := net.InterfaceByName("eth0") // 替换为你的网卡名
+	iface, err := net.InterfaceByName("ens34") // 替换为你的网卡名
 	if err != nil {
 		log.Fatalf("failed to get interface: %v", err)
 	}
@@ -140,44 +168,69 @@ func main() {
 	}
 	defer xdpLink.Close()
 
-	events, ok := coll.Maps["events"]
+	eventsRingbuf, ok := coll.Maps["events_ringbuf"]
 	if !ok {
-		log.Fatalf("events map not found")
+		log.Fatalf("events_ringbuf map not found")
 	}
 
-	reader, err := perf.NewReader(events, os.Getpagesize())
+	rd, err := ringbuf.NewReader(eventsRingbuf)
 	if err != nil {
-		log.Fatalf("failed to create perf reader: %v", err)
+		log.Fatalf("failed to create ringbuf reader: %v", err)
 	}
-	defer reader.Close()
+	defer rd.Close()
 
-	// sig := make(chan os.Signal, 1)
-	// signal.Notify(sig, os.Interrupt)
+	// 创建 pcap 文件
+	f, err := os.Create("output.pcap")
+	if err != nil {
+		log.Fatalf("failed to create pcap file: %v", err)
+	}
+	defer f.Close()
+	w := pcapgo.NewWriter(f)
+	w.WriteFileHeader(1500, layers.LinkTypeEthernet)
 
-	fmt.Println("Listening for ICMP events...")
+	// 打开抓包开关
+	configMap := coll.Maps["config_map"]
+	err = setTraceFlag(configMap)
+	if err != nil {
+		log.Fatalf("Failed to set trace flag: %v", err)
+	}
+
+	// 设置过滤规则
+	rule := FilterRule{
+		SrcIP:    0,
+		DstIP:    0,  // 不过滤目标IP
+		SrcPort:  0,  // 过滤源端口
+		DstPort:  0,  // 不过滤目标端口
+		Protocol: 17, // IPPROTO_UDP
+	}
+
+	key := uint32(0)
+	filterRuleMap := coll.Maps["filter_rule_map"]
+	err = filterRuleMap.Update(&key, &rule, ebpf.UpdateAny)
+	if err != nil {
+		log.Fatalf("Failed to set filter rule: %v", err)
+	}
+
 	for {
-		// select {
-		// // case <-sig:
-		// // 	fmt.Println("Exiting...")
-		// // 	return
-		// default:
-		record, err := reader.Read()
+		record, err := rd.Read()
 		if err != nil {
-			log.Fatalf("failed to read from perf buffer: %v", err)
+			log.Fatalf("ringbuf read error: %v", err)
 		}
-		fmt.Printf("Read %d bytes\n", len(record.RawSample))
-		if record.LostSamples != 0 {
-			fmt.Printf("Lost %d samples\n", record.LostSamples)
+
+		var evt TraceEvent
+		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &evt); err != nil {
+			log.Printf("Error parsing trace event: %v", err)
 			continue
 		}
-		var evt icmpEvent
-		if len(record.RawSample) >= 8 {
-			evt.Src = binary.LittleEndian.Uint32(record.RawSample[0:4])
-			evt.Dst = binary.LittleEndian.Uint32(record.RawSample[4:8])
-			fmt.Printf("ICMP src: %d.%d.%d.%d dst: %d.%d.%d.%d\n",
-				evt.Src>>24, (evt.Src>>16)&0xff, (evt.Src>>8)&0xff, evt.Src&0xff,
-				evt.Dst>>24, (evt.Dst>>16)&0xff, (evt.Dst>>8)&0xff, evt.Dst&0xff)
-		}
+
+		pkt := evt.Raw[:evt.PktLen]
+		// packet := gopacket.NewPacket(pkt, layers.LayerTypeEthernet, gopacket.Default)
+		// fmt.Println(packet)
+
+		w.WritePacket(gopacket.CaptureInfo{
+			Timestamp:     time.Now(),
+			CaptureLength: int(evt.PktLen),
+			Length:        int(evt.PktLen),
+		}, pkt)
 	}
-	// }
 }
