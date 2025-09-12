@@ -59,13 +59,12 @@ sudo apt install -y \
   - cat /sys/kernel/debug/tracing/trace_pipe
 
 ### 关于循环使用
-- ptr 不能等于 data_end
-- ``` c
-    // udp csum计算
-    __u8 *ptr = (__u8 *)udp;
-    while(ptr < (__u8*)data_end && (ptr+1) < (__u8*)data_end) {
-        __u16 word = ((__u16)*ptr << 8) | *(ptr+1); // 大端序组合
-        udp_csum += word;
-        ptr += 2;
-    }
-    ```
+- bpf禁用大循环，循环必须有明确的界限
+
+### 关于多核
+- 每个CPU核心都可能被分配到网卡的一个或多个RX队列
+- 每个核心上的XDP程序是独立执行的
+1. 数据包根据五元组被hash到不同的网卡队列
+2. 不同的网卡队列根据亲和性被不同cpu核心处理
+3. 不同cpu核心都会运行独立的xdp程序
+4. 数据包可能会被不同核心处理
