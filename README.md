@@ -57,3 +57,15 @@ sudo apt install -y \
   - 
 2. 查看日志
   - cat /sys/kernel/debug/tracing/trace_pipe
+
+### 关于循环使用
+- ptr 不能等于 data_end
+- ``` c
+    // udp csum计算
+    __u8 *ptr = (__u8 *)udp;
+    while(ptr < (__u8*)data_end && (ptr+1) < (__u8*)data_end) {
+        __u16 word = ((__u16)*ptr << 8) | *(ptr+1); // 大端序组合
+        udp_csum += word;
+        ptr += 2;
+    }
+    ```

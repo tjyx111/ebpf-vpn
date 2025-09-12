@@ -6,8 +6,9 @@
 #include <linux/icmp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include "udp_echo.h"
-#include "trace.h"
+#include <xdp/app/udp_echo.h>
+#include <xdp/app/trace.h>
+#include <xdp/common/all.h>
 
 #define UDP_ECHO_PORT 18080
 
@@ -15,17 +16,17 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(key_size, sizeof(__u32));
     __uint(value_size, sizeof(__u32));
-    __uint(max_entries, 32);
+    __uint(max_entries, 128);
 } config_map SEC(".maps");
 
 SEC("xdp")
 int xdp_firewall(struct xdp_md *ctx) {
-    __u32 key_port = 0, key_trace = 1;
-    __u32 *udp_port = bpf_map_lookup_elem(&config_map, &key_port);
-    __u32 *trace_flag = bpf_map_lookup_elem(&config_map, &key_trace);
-    __u16 filter_port = UDP_ECHO_PORT;
+    u32 key_port = 0, key_trace = 1;
+    u32 *udp_port = bpf_map_lookup_elem(&config_map, &key_port);
+    u32 *trace_flag = bpf_map_lookup_elem(&config_map, &key_trace);
+    u32 filter_port = UDP_ECHO_PORT;
     if (udp_port != NULL && *udp_port != 0) {
-        filter_port = (__u16)(*udp_port);
+        filter_port = *udp_port;
     }
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
