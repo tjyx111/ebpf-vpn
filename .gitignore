@@ -1,0 +1,5 @@
+*.o
+ebpf-vpn
+.vscode
+go.sum
+*.pcap
