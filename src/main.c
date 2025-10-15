@@ -21,21 +21,41 @@ struct {
 
 SEC("xdp")
 int xdp_firewall(struct xdp_md *ctx) {
-    u32 key_port = 0, key_trace = 1;
+    u32 key_port = 0, key_trace = 1, key_redirect_to_afxdp = 2;
     u32 *udp_port = bpf_map_lookup_elem(&config_map, &key_port);
     u32 *trace_flag = bpf_map_lookup_elem(&config_map, &key_trace);
+    u32 *redirect_to_afxdp = bpf_map_lookup_elem(&config_map, &key_redirect_to_afxdp);
     u32 filter_port = UDP_ECHO_PORT;
     if (udp_port != NULL && *udp_port != 0) {
         filter_port = *udp_port;
     }
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
+
     struct ethhdr *eth = data;
-    
     if ((void *)(eth + 1) > data_end) return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end) return XDP_PASS;
+
+    // 优先判断是否需要重定向到afxdp
+    int redirect_to_afxdp_enabled = (redirect_to_afxdp && *redirect_to_afxdp == 1);
+    if (redirect_to_afxdp_enabled) {
+        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
+            __u32 index = 0;
+            int redirect_result = bpf_redirect_map(&xsks_map, index, 0);
+            if (redirect_result == XDP_REDIRECT) {
+                bpf_trace_printk("Success to AF_XDP socket protocol %d res %d\n", sizeof("Success to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
+                return redirect_result;
+            } else {
+                bpf_trace_printk("Failed to AF_XDP socket protocol %d res %d\n", sizeof("Failed to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
+            }
+        }
+    }
+
     int trace_enabled = (trace_flag && *trace_flag == 1);
     if (trace_enabled) {
-        bpf_trace_printk("trace_in\n", sizeof("trace_in\n"));
+        // bpf_trace_printk("trace_in\n", sizeof("trace_in\n"));
         send_trace_event(ctx, data, data_end, XDP_PASS, 0);
     }
 
@@ -43,9 +63,6 @@ int xdp_firewall(struct xdp_md *ctx) {
     if (eth->h_proto != bpf_htons(ETH_P_IP)) {
         return XDP_PASS;
     }
-    
-    struct iphdr *ip = (void *)(eth + 1);
-    if ((void *)(ip + 1) > data_end) return XDP_PASS;
 
     // 检查是否为ICMP协议
     if (ip->protocol == IPPROTO_ICMP) {
