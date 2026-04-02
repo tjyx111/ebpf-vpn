@@ -20,7 +20,7 @@ struct {
 } config_map SEC(".maps");
 
 SEC("xdp")
-int xdp_firewall(struct xdp_md *ctx) {
+int xdp_gateway(struct xdp_md *ctx) {
     u32 key_port = 0, key_trace = 1, key_redirect_to_afxdp = 2;
     u32 *udp_port = bpf_map_lookup_elem(&config_map, &key_port);
     u32 *trace_flag = bpf_map_lookup_elem(&config_map, &key_trace);

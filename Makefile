@@ -2,11 +2,11 @@ CC = clang
 
 # build dir
 build:
-	mkdir -p build/xdp
+	mkdir -p bpf/build/xdp
 
 # Top-level directories.
-BUILD_DIR = build
-SRC_DIR = src
+BUILD_DIR = bpf/build
+SRC_DIR = bpf/src
 XDP_DIR = $(SRC_DIR)/xdp
 
 # Additional build directories.
