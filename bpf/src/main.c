@@ -12,23 +12,87 @@
 
 #define UDP_ECHO_PORT 18080
 
+// 引入结构体定义
+#include <xdp/common/vpn_config.h>
+#include <xdp/common/capture_rule.h>
+
+// 配置 Map
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(key_size, sizeof(__u32));
-    __uint(value_size, sizeof(__u32));
-    __uint(max_entries, 128);
+    __uint(value_size, sizeof(struct vpn_config));
+    __uint(max_entries, 1);
 } config_map SEC(".maps");
+
+// 抓包规则 Map
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(struct capture_rule));
+    __uint(max_entries, 1);
+} capture_rule_map SEC(".maps");
+
+// Helper 函数：获取配置
+static __always_inline struct vpn_config* get_vpn_config(void) {
+    __u32 key = 0;
+    return bpf_map_lookup_elem(&config_map, &key);
+}
+
+// Helper 函数：检查标志位
+static __always_inline int cfg_flag_enabled(struct vpn_config *cfg, __u8 flag) {
+    return cfg && (cfg->flags & flag);
+}
+
+// Helper 函数：获取抓包规则
+static __always_inline struct capture_rule* get_capture_rule(void) {
+    __u32 key = 0;
+    return bpf_map_lookup_elem(&capture_rule_map, &key);
+}
+
+// Helper 函数：判断是否需要镜像
+static __always_inline int should_mirror_packet(struct vpn_config *cfg) {
+    if (!cfg_flag_enabled(cfg, CFG_FLAG_TRACE_ENABLED))
+        return 0;
+    
+    if (cfg->mirror_sample_rate < 100) {
+        __u32 rand = bpf_get_prandom_u32();
+        if ((rand % 100) >= cfg->mirror_sample_rate)
+            return 0;
+    }
+    
+    return 1;
+}
+
+// Helper 函数：匹配抓包规则
+static __always_inline int match_capture_rule(struct capture_rule *rule,
+                                               __u32 src_ip,
+                                               __u32 dst_ip,
+                                               __u16 src_port,
+                                               __u16 dst_port,
+                                               __u8 protocol) {
+    if (!rule)
+        return 0;
+    
+    if (rule->src_ip && ((src_ip & rule->src_ip_mask) != (rule->src_ip & rule->src_ip_mask)))
+        return 0;
+    
+    if (rule->dst_ip && ((dst_ip & rule->dst_ip_mask) != (rule->dst_ip & rule->dst_ip_mask)))
+        return 0;
+    
+    if (rule->src_port && ((src_port & rule->src_port_mask) != (rule->src_port & rule->src_port_mask)))
+        return 0;
+    
+    if (rule->dst_port && ((dst_port & rule->dst_port_mask) != (rule->dst_port & rule->dst_port_mask)))
+        return 0;
+    
+    if (rule->protocol && protocol != rule->protocol)
+        return 0;
+    
+    return 1;
+}
 
 SEC("xdp")
 int xdp_gateway(struct xdp_md *ctx) {
-    u32 key_port = 0, key_trace = 1, key_redirect_to_afxdp = 2;
-    u32 *udp_port = bpf_map_lookup_elem(&config_map, &key_port);
-    u32 *trace_flag = bpf_map_lookup_elem(&config_map, &key_trace);
-    u32 *redirect_to_afxdp = bpf_map_lookup_elem(&config_map, &key_redirect_to_afxdp);
-    u32 filter_port = UDP_ECHO_PORT;
-    if (udp_port != NULL && *udp_port != 0) {
-        filter_port = *udp_port;
-    }
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
 
@@ -38,49 +102,59 @@ int xdp_gateway(struct xdp_md *ctx) {
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end) return XDP_PASS;
 
-    // 优先判断是否需要重定向到afxdp
-    int redirect_to_afxdp_enabled = (redirect_to_afxdp && *redirect_to_afxdp == 1);
-    if (redirect_to_afxdp_enabled) {
-        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
-            __u32 index = 0;
-            int redirect_result = bpf_redirect_map(&xsks_map, index, 0);
-            if (redirect_result == XDP_REDIRECT) {
-                bpf_trace_printk("Success to AF_XDP socket protocol %d res %d\n", sizeof("Success to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
-                return redirect_result;
-            } else {
-                bpf_trace_printk("Failed to AF_XDP socket protocol %d res %d\n", sizeof("Failed to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
-            }
-        }
-    }
-
-    int trace_enabled = (trace_flag && *trace_flag == 1);
-    if (trace_enabled) {
-        // bpf_trace_printk("trace_in\n", sizeof("trace_in\n"));
-        send_trace_event(ctx, data, data_end, XDP_PASS, 0);
-    }
-
-    // 只处理IP包
     if (eth->h_proto != bpf_htons(ETH_P_IP)) {
         return XDP_PASS;
     }
 
-    // 检查是否为ICMP协议
-    if (ip->protocol == IPPROTO_ICMP) {
-        bpf_trace_printk("ICMP packet detected\n", sizeof("ICMP packet detected\n"));
+    // 读取配置
+    struct vpn_config *cfg = get_vpn_config();
+    if (!cfg) {
         return XDP_PASS;
     }
 
+    // 抓包逻辑
+    if (cfg_flag_enabled(cfg, CFG_FLAG_TRACE_ENABLED)) {
+        struct capture_rule *rule = get_capture_rule();
+
+        if (ip->protocol == IPPROTO_UDP || ip->protocol == IPPROTO_TCP) {
+            struct udphdr *udp = (void *)(ip + 1);
+            if ((void *)(udp + 1) > data_end) return XDP_PASS;
+
+            if (rule && match_capture_rule(rule, ip->saddr, ip->daddr,
+                                            udp->source, udp->dest, ip->protocol)) {
+                if (should_mirror_packet(cfg)) {
+                    send_trace_event(ctx, data, data_end, XDP_PASS, 0);
+                }
+            }
+        }
+    }
+
+    // AF_XDP 重定向
+    if (cfg_flag_enabled(cfg, CFG_FLAG_AFXDP_REDIRECT)) {
+        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
+            __u32 index = 0;
+            return bpf_redirect_map(&xsks_map, index, 0);
+        }
+    }
+
+    // ICMP
+    if (ip->protocol == IPPROTO_ICMP) {
+        return XDP_PASS;
+    }
+
+    // UDP Echo
     if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)(ip + 1);
         if ((void *)(udp + 1) > data_end) return XDP_PASS;
-        if (udp->dest == bpf_htons(filter_port)) {
-            // 调用udp_echo服务
-            int ret = xdp_udpecho(eth, ip, udp, data_end);
-            if (trace_enabled) {
-                bpf_trace_printk("trace_out %d\n", sizeof("trace_out %d\n"), ret);
-                send_trace_event(ctx, data, data_end, ret, 0);
+
+        if (cfg_flag_enabled(cfg, CFG_FLAG_UDP_ECHO_ENABLED)) {
+            if (udp->dest == bpf_htons(cfg->udp_echo_port)) {
+                int ret = xdp_udpecho(eth, ip, udp, data_end);
+                if (cfg_flag_enabled(cfg, CFG_FLAG_TRACE_ENABLED)) {
+                    send_trace_event(ctx, data, data_end, ret, 0);
+                }
+                return ret;
             }
-            return ret;
         }
     }
 

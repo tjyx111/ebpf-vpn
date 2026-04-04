@@ -90,57 +90,44 @@ static __always_inline void send_trace_event(struct xdp_md *ctx, void *data, voi
      // 五元组过滤
     if (!match_filter_rule(ip, (void *)(ip + 1), data_end)) return;
 
-    // 使用 AF_XDP 将数据包重定向到用户空间
-    // queue_id 可以根据需要选择，通常是 0
-   __u32 index = 0;
-    
-    // 将数据包重定向到 AF_XDP socket
+    __u32 pkt_real_len = data_end - data;
+    __u32 pkt_len = pkt_real_len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : pkt_real_len;
 
-    int redirect_result = bpf_redirect_map(&xsks_map, index, 0);
-    if (redirect_result != XDP_REDIRECT) {
-        bpf_trace_printk("Failed to AF_XDP socket protocol %d res %d\n", sizeof("Failed to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
-        return;
-    } else {
-        bpf_trace_printk("Success to AF_XDP socket protocol %d res %d\n", sizeof("Success to AF_XDP socket protocol %d res %d\n"), ip->protocol, redirect_result);
+    // 1. 检查数据包是否超过我们定义的大小
+    if (pkt_len > MAX_PACKET_SIZE) {
+        bpf_trace_printk("Packet too large: %d\n", sizeof("Packet too large: %d\n"), pkt_len);
         return;
     }
-    
-    // __u32 pkt_real_len = data_end - data;
-    // __u32 pkt_len = pkt_real_len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : pkt_real_len;
 
-    // // 1. 检查数据包是否超过我们定义的大小
-    // if (pkt_len > MAX_PACKET_SIZE) {
-    //     bpf_printk("Packet too large: %d", pkt_len);
-    //     return;
-    // }
+    // 2. 在 ringbuf 中为事件申请空间
+    struct trace_event *event;
+    event = bpf_ringbuf_reserve(&events_ringbuf, sizeof(*event), 0);
+    if (!event) {
+        // 申请失败（通常是用户空间消费太慢，ringbuf 满了）
+        bpf_trace_printk("Ringbuf full, dropping packet\n", sizeof("Ringbuf full, dropping packet\n"));
+        return;
+    }
 
-    // // 2. 在 ringbuf 中为事件申请空间
-    // struct trace_event *event;
-    // event = bpf_ringbuf_reserve(&events_ringbuf, sizeof(*event), 0);
-    // if (!event) {
-    //     // 申请失败（通常是用户空间消费太慢，ringbuf 满了）
-    //     return;
-    // }
+    event->pkt_real_len = pkt_real_len;
+    event->pkt_len = pkt_len;
 
-    // event->pkt_real_len = pkt_real_len;
-    // event->pkt_len = pkt_len;
+    // 4. 关键步骤：将完整数据包拷贝到用户态缓冲区
+    //    使用 bpf_probe_read_kernel 或直接指针操作（如果类型正确）
+    long err = bpf_probe_read_kernel(
+        event->packet_data,
+        event->pkt_len, // 拷贝源长度
+        data         // 源地址（数据包起始位置）
+    );
+    if (err) {
+        // 拷贝失败，释放预留的 ringbuf 空间
+        bpf_ringbuf_discard(event, 0);
+        bpf_trace_printk("Failed to copy packet: %ld\n", sizeof("Failed to copy packet: %ld\n"), err);
+        return;
+    }
 
-    // // 4. 关键步骤：将完整数据包拷贝到用户态缓冲区
-    // //    使用 bpf_probe_read_kernel 或直接指针操作（如果类型正确）
-    // long err = bpf_probe_read_kernel(
-    //     event->packet_data, 
-    //     event->pkt_len, // 拷贝源长度
-    //     data         // 源地址（数据包起始位置）
-    // );
-    // if (err) {
-    //     // 拷贝失败，释放预留的 ringbuf 空间
-    //     bpf_ringbuf_discard(event, 0);
-    //     return;
-    // }
+    event->xdp_action = xdp_action;
 
-    // event->xdp_action = xdp_action;
-
-    // bpf_ringbuf_submit(event, 0);
+    bpf_ringbuf_submit(event, 0);
 }
 
 #endif // TRACE_H

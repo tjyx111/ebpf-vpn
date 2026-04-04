@@ -61,10 +61,11 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	ConfigMap     *ebpf.MapSpec `ebpf:"config_map"`
-	EventsRingbuf *ebpf.MapSpec `ebpf:"events_ringbuf"`
-	FilterRuleMap *ebpf.MapSpec `ebpf:"filter_rule_map"`
-	XsksMap       *ebpf.MapSpec `ebpf:"xsks_map"`
+	CaptureRuleMap *ebpf.MapSpec `ebpf:"capture_rule_map"`
+	ConfigMap      *ebpf.MapSpec `ebpf:"config_map"`
+	EventsRingbuf  *ebpf.MapSpec `ebpf:"events_ringbuf"`
+	FilterRuleMap  *ebpf.MapSpec `ebpf:"filter_rule_map"`
+	XsksMap        *ebpf.MapSpec `ebpf:"xsks_map"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
@@ -93,14 +94,16 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	ConfigMap     *ebpf.Map `ebpf:"config_map"`
-	EventsRingbuf *ebpf.Map `ebpf:"events_ringbuf"`
-	FilterRuleMap *ebpf.Map `ebpf:"filter_rule_map"`
-	XsksMap       *ebpf.Map `ebpf:"xsks_map"`
+	CaptureRuleMap *ebpf.Map `ebpf:"capture_rule_map"`
+	ConfigMap      *ebpf.Map `ebpf:"config_map"`
+	EventsRingbuf  *ebpf.Map `ebpf:"events_ringbuf"`
+	FilterRuleMap  *ebpf.Map `ebpf:"filter_rule_map"`
+	XsksMap        *ebpf.Map `ebpf:"xsks_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
+		m.CaptureRuleMap,
 		m.ConfigMap,
 		m.EventsRingbuf,
 		m.FilterRuleMap,
