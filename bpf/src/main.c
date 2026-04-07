@@ -53,38 +53,32 @@ static __always_inline int match_single_rule(struct capture_rule *rule,
     if (!rule)
         return 0;
 
-    // 检查协议
-    if (rule->protocol && protocol != rule->protocol) {
-        bpf_trace_printk("Rule proto mismatch: want=%d, got=%d\n", sizeof("Rule proto mismatch: want=%d, got=%d\n"), rule->protocol, protocol);
-        return 0;
+    // 检查规则是否已设置（reserved[0] 作为标志位）
+    if (rule->reserved[0] == 0) {
+        return 0;  // 未设置的槽位，跳过
     }
+
+    // 检查协议
+    if (rule->protocol && protocol != rule->protocol)
+        return 0;
 
     // 检查源IP
-    if (rule->src_ip && ((src_ip & rule->src_ip_mask) != (rule->src_ip & rule->src_ip_mask))) {
-        bpf_trace_printk("Rule src_ip mismatch\n", sizeof("Rule src_ip mismatch\n"));
+    if (rule->src_ip && ((src_ip & rule->src_ip_mask) != (rule->src_ip & rule->src_ip_mask)))
         return 0;
-    }
 
     // 检查目标IP
-    if (rule->dst_ip && ((dst_ip & rule->dst_ip_mask) != (rule->dst_ip & rule->dst_ip_mask))) {
-        bpf_trace_printk("Rule dst_ip mismatch\n", sizeof("Rule dst_ip mismatch\n"));
+    if (rule->dst_ip && ((dst_ip & rule->dst_ip_mask) != (rule->dst_ip & rule->dst_ip_mask)))
         return 0;
-    }
 
     // 检查源端口
-    if (rule->src_port && ((src_port & rule->src_port_mask) != (rule->src_port & rule->src_port_mask))) {
-        bpf_trace_printk("Rule src_port mismatch: want=%d, got=%d\n", sizeof("Rule src_port mismatch: want=%d, got=%d\n"), bpf_ntohs(rule->dst_port), bpf_ntohs(src_port));
+    if (rule->src_port && ((src_port & rule->src_port_mask) != (rule->src_port & rule->src_port_mask)))
         return 0;
-    }
 
     // 检查目标端口
-    if (rule->dst_port && ((dst_port & rule->dst_port_mask) != (rule->dst_port & rule->dst_port_mask))) {
-        bpf_trace_printk("Rule dst_port mismatch: want=%d, got=%d\n", sizeof("Rule dst_port mismatch: want=%d, got=%d\n"), bpf_ntohs(rule->dst_port), bpf_ntohs(dst_port));
+    if (rule->dst_port && ((dst_port & rule->dst_port_mask) != (rule->dst_port & rule->dst_port_mask)))
         return 0;
-    }
 
-    bpf_trace_printk("Rule matched! proto=%d, dst_port=%d\n", sizeof("Rule matched! proto=%d, dst_port=%d\n"), protocol, bpf_ntohs(dst_port));
-    return 1;
+    return 1;  // 匹配成功
 }
 
 // Helper 函数：匹配所有抓包规则（遍历所有规则）
@@ -93,14 +87,14 @@ static __always_inline int match_any_capture_rule(__u32 src_ip,
                                                    __u16 src_port,
                                                    __u16 dst_port,
                                                    __u8 protocol) {
-    int has_rules = 0;
     int matched = 0;
+    int has_rules = 0;
 
     // 遍历所有规则，只要有一条匹配就返回 1
     for (int i = 0; i < 16; i++) {
         __u32 key = i;
         struct capture_rule *rule = bpf_map_lookup_elem(&capture_rule_map, &key);
-        if (rule) {
+        if (rule && rule->reserved[0]) {
             has_rules = 1;
             if (match_single_rule(rule, src_ip, dst_ip, src_port, dst_port, protocol)) {
                 matched = 1;
@@ -109,9 +103,9 @@ static __always_inline int match_any_capture_rule(__u32 src_ip,
         }
     }
 
-    // 如果没有配置任何规则，默认抓取所有数据包
+    // 如果没有配置任何规则，默认不抓取（返回 0）
     if (!has_rules)
-        return 1;
+        return 0;
 
     return matched;
 }

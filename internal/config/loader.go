@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -248,41 +249,49 @@ func (c *Config) SyncCaptureRulesToMap(captureRuleMap *ebpf.Map) error {
 
 	const maxRules = 16
 	const ruleSize = 31 // sizeof(capture_rule) = 4+4+4+4+2+2+2+2+1+6 = 31
-	emptyValue := make([]byte, ruleSize) // 空规则，全零
 
-	// 遍历所有槽位
+	// 限制最多 16 条规则
+	ruleCount := len(c.CaptureRules)
+	if ruleCount > maxRules {
+		log.Printf("Warning: too many capture rules (%d), only first %d will be used", ruleCount, maxRules)
+		ruleCount = maxRules
+	}
+
+	// 先清空所有槽位（写入全零，表示未设置）
+	emptyValue := make([]byte, ruleSize)
 	for i := uint32(0); i < maxRules; i++ {
-		key := i
-
-		if i < uint32(len(c.CaptureRules)) {
-			// 写入配置的规则
-			rule := c.CaptureRules[i]
-
-			// 将 CaptureRule 转换为字节（使用网络字节序 BigEndian）
-			value := make([]byte, ruleSize)
-			binary.BigEndian.PutUint32(value[0:4], rule.SrcIP)
-			binary.BigEndian.PutUint32(value[4:8], rule.SrcIPMask)
-			binary.BigEndian.PutUint32(value[8:12], rule.DstIP)
-			binary.BigEndian.PutUint32(value[12:16], rule.DstIPMask)
-			binary.BigEndian.PutUint16(value[16:18], rule.SrcPort)
-			binary.BigEndian.PutUint16(value[18:20], rule.SrcPortMask)
-			binary.BigEndian.PutUint16(value[20:22], rule.DstPort)
-			binary.BigEndian.PutUint16(value[22:24], rule.DstPortMask)
-			value[24] = rule.Protocol
-			for j := 0; j < 6; j++ {
-				value[25+j] = rule.Reserved[j]
-			}
-
-			if err := captureRuleMap.Put(&key, value); err != nil {
-				return fmt.Errorf("failed to write rule %d: %w", i, err)
-			}
-		} else {
-			// 清空未使用的槽位（写入空规则）
-			if err := captureRuleMap.Put(&key, emptyValue); err != nil {
-				return fmt.Errorf("failed to clear rule slot %d: %w", i, err)
-			}
+		if err := captureRuleMap.Put(&i, emptyValue); err != nil {
+			return fmt.Errorf("failed to clear rule slot %d: %w", i, err)
 		}
 	}
 
+	// 写入配置的规则
+	for i := 0; i < ruleCount; i++ {
+		rule := c.CaptureRules[i]
+		key := uint32(i)
+
+		// 将 CaptureRule 转换为字节（使用网络字节序 BigEndian）
+		value := make([]byte, ruleSize)
+		binary.BigEndian.PutUint32(value[0:4], rule.SrcIP)
+		binary.BigEndian.PutUint32(value[4:8], rule.SrcIPMask)
+		binary.BigEndian.PutUint32(value[8:12], rule.DstIP)
+		binary.BigEndian.PutUint32(value[12:16], rule.DstIPMask)
+		binary.BigEndian.PutUint16(value[16:18], rule.SrcPort)
+		binary.BigEndian.PutUint16(value[18:20], rule.SrcPortMask)
+		binary.BigEndian.PutUint16(value[20:22], rule.DstPort)
+		binary.BigEndian.PutUint16(value[22:24], rule.DstPortMask)
+		value[24] = rule.Protocol
+		// reserved[0] 作为标志位：1 表示规则已设置
+		value[25] = 1
+		for j := 1; j < 6; j++ {
+			value[25+j] = rule.Reserved[j-1]
+		}
+
+		if err := captureRuleMap.Put(&key, value); err != nil {
+			return fmt.Errorf("failed to write rule %d: %w", i, err)
+		}
+	}
+
+	log.Printf("Synced %d capture rules to eBPF map", ruleCount)
 	return nil
 }
