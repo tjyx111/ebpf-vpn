@@ -1,0 +1,24 @@
+[network]
+udp_echo_port = 28080
+mtu = 1500
+
+[features]
+trace_enabled = true
+afxdp_redirect = false
+udp_echo_enabled = true
+forwarding_enabled = false
+nat_enabled = false
+mirror_enabled = true
+
+[tracing]
+mirror_sample_rate = 100
+
+# 抓包规则配置
+# 支持多条规则，只要匹配任一规则就会抓包
+# 如果没有任何规则，则抓取所有数据包
+
+[[capture_rules]]
+name = "udp echo"
+dst_port = 28080
+protocol = "udp"
+

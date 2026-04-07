@@ -53,6 +53,10 @@ static __always_inline int match_filter_rule(struct iphdr *ip, struct udphdr *ud
     struct filter_rule *rule = bpf_map_lookup_elem(&filter_rule_map, &key);
     if (!rule) return 0;
 
+    // 检查是否为空规则（全零表示未配置，默认不匹配）
+    if (!rule->protocol && !rule->src_ip && !rule->dst_ip && !rule->src_port && !rule->dst_port)
+        return 0;
+
     // 检查协议
     if (rule->protocol && ip->protocol != rule->protocol)
         return 0;
@@ -87,8 +91,7 @@ static __always_inline void send_trace_event(struct xdp_md *ctx, void *data, voi
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end) return;
 
-     // 五元组过滤
-    if (!match_filter_rule(ip, (void *)(ip + 1), data_end)) return;
+    // 注意：这里不再检查 filter_rule_map，因为调用者（main.c）已经用 capture_rule_map 过滤了
 
     __u32 pkt_real_len = data_end - data;
     __u32 pkt_len = pkt_real_len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : pkt_real_len;
