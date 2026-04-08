@@ -87,13 +87,3 @@ func (p *Program) EventsRingbuf() *ebpf.Map {
 func (p *Program) CaptureRuleMap() *ebpf.Map {
 	return p.objs.CaptureRuleMap
 }
-
-// FilterRuleMap 获取过滤规则 Map
-func (p *Program) FilterRuleMap() *ebpf.Map {
-	return p.objs.FilterRuleMap
-}
-
-// XsksMap 获取 AF_XDP socket Map
-func (p *Program) XsksMap() *ebpf.Map {
-	return p.objs.XsksMap
-}
