@@ -167,11 +167,6 @@ int xdp_gateway(struct xdp_md *ctx) {
         }
     }
 
-    // ICMP
-    if (ip->protocol == IPPROTO_ICMP) {
-        return XDP_PASS;
-    }
-
     return XDP_PASS;
 }
 

@@ -14,11 +14,9 @@ import (
 
 // VpnConfig 对应 C 端的 vpn_config 结构
 type VpnConfig struct {
-	UDPEchoPort      uint32
-	MTU              uint32
-	Flags            uint8
-	MirrorSampleRate uint8
-	Reserved         [2]uint8
+	UDPEchoPort uint32
+	Flags       uint8
+	Reserved    [3]uint8
 }
 
 // CaptureRuleTOML TOML 配置文件中的抓包规则
@@ -49,19 +47,12 @@ type CaptureRule struct {
 type TOMLConfig struct {
 	Network struct {
 		UDPEchoPort uint32 `toml:"udp_echo_port"`
-		MTU         uint32 `toml:"mtu"`
 	} `toml:"network"`
 	Features struct {
-		TraceEnabled      bool `toml:"trace_enabled"`
-		AfXdpRedirect     bool `toml:"afxdp_redirect"`
-		UDPEchoEnabled    bool `toml:"udp_echo_enabled"`
-		ForwardingEnabled bool `toml:"forwarding_enabled"`
-		NATEnabled        bool `toml:"nat_enabled"`
-		MirrorEnabled     bool `toml:"mirror_enabled"`
+		TraceEnabled   bool `toml:"trace_enabled"`
+		AfXdpRedirect  bool `toml:"afxdp_redirect"`
+		UDPEchoEnabled bool `toml:"udp_echo_enabled"`
 	} `toml:"features"`
-	Tracing struct {
-		MirrorSampleRate uint8 `toml:"mirror_sample_rate"`
-	} `toml:"tracing"`
 	CaptureRules []CaptureRuleTOML `toml:"capture_rules"`
 }
 
@@ -102,10 +93,8 @@ func LoadFromFile(path string) (*Config, error) {
 // convertToVpnConfig 将 TOML 配置转换为 VpnConfig
 func convertToVpnConfig(tomlCfg *TOMLConfig) *VpnConfig {
 	cfg := &VpnConfig{
-		UDPEchoPort:      tomlCfg.Network.UDPEchoPort,
-		MTU:              tomlCfg.Network.MTU,
-		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
-		Reserved:         [2]uint8{0, 0},
+		UDPEchoPort: tomlCfg.Network.UDPEchoPort,
+		Reserved:    [3]uint8{0, 0, 0},
 	}
 
 	// 设置标志位
@@ -117,15 +106,6 @@ func convertToVpnConfig(tomlCfg *TOMLConfig) *VpnConfig {
 	}
 	if tomlCfg.Features.UDPEchoEnabled {
 		cfg.Flags |= 1 << 2 // CFG_FLAG_UDP_ECHO_ENABLED
-	}
-	if tomlCfg.Features.ForwardingEnabled {
-		cfg.Flags |= 1 << 3 // CFG_FLAG_FORWARDING_ENABLED
-	}
-	if tomlCfg.Features.NATEnabled {
-		cfg.Flags |= 1 << 4 // CFG_FLAG_NAT_ENABLED
-	}
-	if tomlCfg.Features.MirrorEnabled {
-		cfg.Flags |= 1 << 5 // CFG_FLAG_MIRROR_ENABLED
 	}
 
 	return cfg
@@ -230,13 +210,12 @@ func (c *VpnConfig) SyncToMap(configMap *ebpf.Map) error {
 	key := uint32(0) // CFG_KEY
 
 	// 将 VpnConfig 转换为字节
-	value := make([]byte, 12) // sizeof(vpn_config) = 4+4+1+1+2 = 12
+	value := make([]byte, 8) // sizeof(vpn_config) = 4+1+3 = 8
 	binary.LittleEndian.PutUint32(value[0:4], c.UDPEchoPort)
-	binary.LittleEndian.PutUint32(value[4:8], c.MTU)
-	value[8] = c.Flags
-	value[9] = c.MirrorSampleRate
-	value[10] = c.Reserved[0]
-	value[11] = c.Reserved[1]
+	value[4] = c.Flags
+	value[5] = c.Reserved[0]
+	value[6] = c.Reserved[1]
+	value[7] = c.Reserved[2]
 
 	return configMap.Put(&key, value)
 }

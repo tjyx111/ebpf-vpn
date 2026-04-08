@@ -32,8 +32,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-		cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.MTU, cfg.VpnConfig.Flags, cfg.VpnConfig.MirrorSampleRate, len(cfg.CaptureRules))
+	log.Printf("Loaded config: UDP echo port=%d, Flags=0x%02x, Capture rules=%d",
+		cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.Flags, len(cfg.CaptureRules))
 
 	// 加载 XDP 程序
 	program, err := xdp.Load(*ifaceName)
@@ -124,8 +124,8 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 					continue
 				}
 
-				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-					cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.MTU, cfg.VpnConfig.Flags, cfg.VpnConfig.MirrorSampleRate, len(cfg.CaptureRules))
+				log.Printf("Config reloaded: UDP echo port=%d, Flags=0x%02x, Capture rules=%d",
+					cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.Flags, len(cfg.CaptureRules))
 			}
 
 		case err, ok := <-watcher.Errors:
