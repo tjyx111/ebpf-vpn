@@ -73,19 +73,9 @@ func (p *Program) Close() error {
 	return nil
 }
 
-// ConfigMap 获取配置 Map (旧的 vpn_config)
-func (p *Program) ConfigMap() *ebpf.Map {
-	return p.objs.ConfigMap
-}
-
-// VpnConfigMap 获取 VPN 全局配置 Map
-func (p *Program) VpnConfigMap() *ebpf.Map {
-	return p.objs.VpnConfigMap
-}
-
-// EventsRingbuf 获取事件 Ring Buffer
-func (p *Program) EventsRingbuf() *ebpf.Map {
-	return p.objs.EventsRingbuf
+// UnifiedConfigMap 获取统一配置 Map
+func (p *Program) UnifiedConfigMap() *ebpf.Map {
+	return p.objs.UnifiedConfigMap
 }
 
 // CaptureRuleMap 获取抓包规则 Map
@@ -93,9 +83,9 @@ func (p *Program) CaptureRuleMap() *ebpf.Map {
 	return p.objs.CaptureRuleMap
 }
 
-// FilterRuleMap 获取过滤规则 Map
-func (p *Program) FilterRuleMap() *ebpf.Map {
-	return p.objs.FilterRuleMap
+// EventsRingbuf 获取事件 Ring Buffer
+func (p *Program) EventsRingbuf() *ebpf.Map {
+	return p.objs.EventsRingbuf
 }
 
 // XsksMap 获取 AF_XDP socket Map

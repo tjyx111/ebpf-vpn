@@ -61,14 +61,13 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	CaptureRuleMap *ebpf.MapSpec `ebpf:"capture_rule_map"`
-	ConfigMap      *ebpf.MapSpec `ebpf:"config_map"`
-	DnatMap        *ebpf.MapSpec `ebpf:"dnat_map"`
-	EventsRingbuf  *ebpf.MapSpec `ebpf:"events_ringbuf"`
-	FilterRuleMap  *ebpf.MapSpec `ebpf:"filter_rule_map"`
-	SnatMap        *ebpf.MapSpec `ebpf:"snat_map"`
-	VpnConfigMap   *ebpf.MapSpec `ebpf:"vpn_config_map"`
-	XsksMap        *ebpf.MapSpec `ebpf:"xsks_map"`
+	CaptureRuleMap   *ebpf.MapSpec `ebpf:"capture_rule_map"`
+	DnatMap          *ebpf.MapSpec `ebpf:"dnat_map"`
+	EventsRingbuf    *ebpf.MapSpec `ebpf:"events_ringbuf"`
+	FilterRuleMap    *ebpf.MapSpec `ebpf:"filter_rule_map"`
+	SnatMap          *ebpf.MapSpec `ebpf:"snat_map"`
+	UnifiedConfigMap *ebpf.MapSpec `ebpf:"unified_config_map"`
+	XsksMap          *ebpf.MapSpec `ebpf:"xsks_map"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
@@ -97,25 +96,23 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	CaptureRuleMap *ebpf.Map `ebpf:"capture_rule_map"`
-	ConfigMap      *ebpf.Map `ebpf:"config_map"`
-	DnatMap        *ebpf.Map `ebpf:"dnat_map"`
-	EventsRingbuf  *ebpf.Map `ebpf:"events_ringbuf"`
-	FilterRuleMap  *ebpf.Map `ebpf:"filter_rule_map"`
-	SnatMap        *ebpf.Map `ebpf:"snat_map"`
-	VpnConfigMap   *ebpf.Map `ebpf:"vpn_config_map"`
-	XsksMap        *ebpf.Map `ebpf:"xsks_map"`
+	CaptureRuleMap   *ebpf.Map `ebpf:"capture_rule_map"`
+	DnatMap          *ebpf.Map `ebpf:"dnat_map"`
+	EventsRingbuf    *ebpf.Map `ebpf:"events_ringbuf"`
+	FilterRuleMap    *ebpf.Map `ebpf:"filter_rule_map"`
+	SnatMap          *ebpf.Map `ebpf:"snat_map"`
+	UnifiedConfigMap *ebpf.Map `ebpf:"unified_config_map"`
+	XsksMap          *ebpf.Map `ebpf:"xsks_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.CaptureRuleMap,
-		m.ConfigMap,
 		m.DnatMap,
 		m.EventsRingbuf,
 		m.FilterRuleMap,
 		m.SnatMap,
-		m.VpnConfigMap,
+		m.UnifiedConfigMap,
 		m.XsksMap,
 	)
 }

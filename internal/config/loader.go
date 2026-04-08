@@ -12,15 +12,6 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-// VpnConfig 对应 C 端的 vpn_config 结构
-type VpnConfig struct {
-	UDPEchoPort      uint32
-	MTU              uint32
-	Flags            uint8
-	MirrorSampleRate uint8
-	Reserved         [2]uint8
-}
-
 // CaptureRuleTOML TOML 配置文件中的抓包规则
 type CaptureRuleTOML struct {
 	Name     string `toml:"name"`
@@ -76,27 +67,34 @@ type TOMLConfig struct {
 	} `toml:"nat"`
 }
 
-// Config 包含 VPN 配置、抓包规则和 NAT 配置
-type Config struct {
-	VpnConfig     *VpnConfig
-	CaptureRules  []CaptureRule
-	NATConfig     *NATConfig
+// UnifiedConfig 对应 C 端的 unified_config 结构
+type UnifiedConfig struct {
+	Flags            uint8
+	Reserved1        [7]uint8
+	UDPEchoPort      uint16
+	Reserved2        uint16
+	MTU              uint32
+	MirrorSampleRate uint8
+	Reserved3        [3]uint8
+	TimeoutNS        uint64
+	VPNServerIP      uint32
+	VPNPort          uint16
+	PortStart        uint16
+	PortEnd          uint16
+	ReservedPorts    [32]uint16
+	ReservedCount    uint16
+	IngressIface     uint8
+	EgressIface      uint8
+	EgressIPCount    uint8
+	Reserved4        uint8
+	EgressIPs        [16]uint32
+	Reserved5        [8]uint8
 }
 
-// NATConfig 对应 C 端的 vpn_global_config 结构
-type NATConfig struct {
-	TimeoutNS      uint64
-	VPNServerIP    uint32
-	VPNPort        uint16
-	PortStart      uint16
-	PortEnd        uint16
-	ReservedPorts [32]uint16
-	ReservedCount  uint16
-	IngressIface   uint8
-	EgressIface    uint8
-	EgressIPCount   uint8
-	Reserved       [3]uint8
-	EgressIPs      [16]uint32
+// Config 包含统一配置和抓包规则
+type Config struct {
+	UnifiedConfig *UnifiedConfig
+	CaptureRules  []CaptureRule
 }
 
 // LoadFromFile 从 TOML 文件加载配置
@@ -112,15 +110,8 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		VpnConfig: convertToVpnConfig(&tomlCfg),
+		UnifiedConfig: convertToUnifiedConfig(&tomlCfg),
 	}
-
-	// 解析 NAT 配置
-	natConfig, err := parseNATConfig(&tomlCfg.NAT)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse NAT config: %w", err)
-	}
-	cfg.NATConfig = natConfig
 
 	// 解析抓包规则
 	for _, rule := range tomlCfg.CaptureRules {
@@ -134,13 +125,17 @@ func LoadFromFile(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// convertToVpnConfig 将 TOML 配置转换为 VpnConfig
-func convertToVpnConfig(tomlCfg *TOMLConfig) *VpnConfig {
-	cfg := &VpnConfig{
-		UDPEchoPort:      tomlCfg.Network.UDPEchoPort,
+// convertToUnifiedConfig 将 TOML 配置转换为 UnifiedConfig
+func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
+	cfg := &UnifiedConfig{
+		UDPEchoPort:      uint16(tomlCfg.Network.UDPEchoPort),
 		MTU:              tomlCfg.Network.MTU,
 		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
-		Reserved:         [2]uint8{0, 0},
+		Reserved1:        [7]uint8{0, 0, 0, 0, 0, 0, 0},
+		Reserved2:        0,
+		Reserved3:        [3]uint8{0, 0, 0},
+		Reserved4:        0,
+		Reserved5:        [8]uint8{0, 0, 0, 0, 0, 0, 0, 0},
 	}
 
 	// 设置标志位
@@ -161,6 +156,43 @@ func convertToVpnConfig(tomlCfg *TOMLConfig) *VpnConfig {
 	}
 	if tomlCfg.Features.MirrorEnabled {
 		cfg.Flags |= 1 << 5 // CFG_FLAG_MIRROR_ENABLED
+	}
+
+	// NAT 配置
+	cfg.TimeoutNS = uint64(tomlCfg.NAT.Timeout) * 1000000000 // 转换为纳秒
+	cfg.VPNPort = tomlCfg.NAT.VPNPort
+	cfg.PortStart = tomlCfg.NAT.PortStart
+	cfg.PortEnd = tomlCfg.NAT.PortEnd
+	cfg.IngressIface = tomlCfg.NAT.IngressIface
+	cfg.EgressIface = tomlCfg.NAT.EgressIface
+	cfg.EgressIPCount = uint8(len(tomlCfg.NAT.EgressIPs))
+	cfg.ReservedCount = uint16(len(tomlCfg.NAT.ReservedPorts))
+
+	// 解析 VPN 服务器 IP
+	if tomlCfg.NAT.VPNServerIP != "" {
+		ip := net.ParseIP(tomlCfg.NAT.VPNServerIP)
+		if ip != nil {
+			cfg.VPNServerIP = ipToUint32(ip)
+		}
+	}
+
+	// 解析预留端口
+	for i, port := range tomlCfg.NAT.ReservedPorts {
+		if i >= 32 {
+			break
+		}
+		cfg.ReservedPorts[i] = port
+	}
+
+	// 解析公网 IP 列表
+	for i, ipStr := range tomlCfg.NAT.EgressIPs {
+		if i >= 16 {
+			break
+		}
+		ip := net.ParseIP(ipStr)
+		if ip != nil {
+			cfg.EgressIPs[i] = ipToUint32(ip)
+		}
 	}
 
 	return cfg
@@ -256,22 +288,67 @@ func ipNetToUint32Mask(ipNet *net.IPNet) uint32 {
 	return binary.BigEndian.Uint32(mask)
 }
 
-// SyncToMap 将配置同步到 eBPF Map
-func (c *VpnConfig) SyncToMap(configMap *ebpf.Map) error {
+// SyncToMap 将统一配置同步到 eBPF Map
+func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	if configMap == nil {
 		return fmt.Errorf("configMap is nil")
 	}
 
 	key := uint32(0) // CFG_KEY
 
-	// 将 VpnConfig 转换为字节
-	value := make([]byte, 12) // sizeof(vpn_config) = 4+4+1+1+2 = 12
-	binary.LittleEndian.PutUint32(value[0:4], c.UDPEchoPort)
-	binary.LittleEndian.PutUint32(value[4:8], c.MTU)
-	value[8] = c.Flags
-	value[9] = c.MirrorSampleRate
-	value[10] = c.Reserved[0]
-	value[11] = c.Reserved[1]
+	// 将 UnifiedConfig 转换为字节（使用网络字节序 BigEndian）
+	// sizeof(unified_config) = 1+7+2+2+4+1+3+8+4+2+2+2+64+2+1+1+1+1+64+8 = 184 字节
+	value := make([]byte, 184)
+
+	offset := 0
+	value[offset] = c.Flags
+	offset += 8 // flags + reserved1
+
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
+	offset += 4 // udp_echo_port + reserved2
+
+	binary.BigEndian.PutUint32(value[offset:offset+4], c.MTU)
+	offset += 4
+
+	value[offset] = c.MirrorSampleRate
+	offset += 4 // mirror_sample_rate + reserved3
+
+	binary.BigEndian.PutUint64(value[offset:offset+8], c.TimeoutNS)
+	offset += 8
+
+	binary.BigEndian.PutUint32(value[offset:offset+4], c.VPNServerIP)
+	offset += 4
+
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.VPNPort)
+	offset += 2
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortStart)
+	offset += 2
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortEnd)
+	offset += 2
+
+	// 预留端口
+	for i := 0; i < 32; i++ {
+		binary.BigEndian.PutUint16(value[offset+i*2:offset+i*2+2], c.ReservedPorts[i])
+	}
+	offset += 64
+
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.ReservedCount)
+	offset += 2
+
+	value[offset] = c.IngressIface
+	offset++
+	value[offset] = c.EgressIface
+	offset++
+	value[offset] = c.EgressIPCount
+	offset += 2 // egress_ip_count + reserved4
+
+	// 公网 IP 列表
+	for i := 0; i < 16; i++ {
+		binary.BigEndian.PutUint32(value[offset+i*4:offset+i*4+4], c.EgressIPs[i])
+	}
+	offset += 64
+
+	// reserved5 已经是零值，无需写入
 
 	return configMap.Put(&key, value)
 }
@@ -329,96 +406,4 @@ func (c *Config) SyncCaptureRulesToMap(captureRuleMap *ebpf.Map) error {
 
 	log.Printf("Synced %d capture rules to eBPF map", ruleCount)
 	return nil
-}
-
-// parseNATConfig 解析 NAT 配置
-func parseNATConfig(tomlCfg *struct {
-	VPNServerIP   string   `toml:"vpn_server_ip"`
-	VPNPort       uint16   `toml:"vpn_port"`
-	PortStart     uint16   `toml:"port_start"`
-	PortEnd       uint16   `toml:"port_end"`
-	ReservedPorts []uint16 `toml:"reserved_ports"`
-	Timeout       int      `toml:"timeout"`
-	IngressIface   uint8    `toml:"ingress_iface"`
-	EgressIface    uint8    `toml:"egress_iface"`
-	EgressIPs     []string `toml:"egress_ips"`
-}) (*NATConfig, error) {
-	cfg := &NATConfig{
-		PortStart:     tomlCfg.PortStart,
-		PortEnd:       tomlCfg.PortEnd,
-		TimeoutNS:      uint64(tomlCfg.Timeout) * 1000000000, // 转换为纳秒
-		VPNPort:       tomlCfg.VPNPort,
-		IngressIface:   tomlCfg.IngressIface,
-		EgressIface:    tomlCfg.EgressIface,
-		EgressIPCount:   uint8(len(tomlCfg.EgressIPs)),
-		ReservedCount:  uint16(len(tomlCfg.ReservedPorts)),
-	}
-
-	// 解析 VPN 服务器 IP
-	if tomlCfg.VPNServerIP != "" {
-		ip := net.ParseIP(tomlCfg.VPNServerIP)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid vpn_server_ip: %s", tomlCfg.VPNServerIP)
-		}
-		cfg.VPNServerIP = ipToUint32(ip)
-	}
-
-	// 解析预留端口
-	for i, port := range tomlCfg.ReservedPorts {
-		if i >= 32 {
-			break
-		}
-		cfg.ReservedPorts[i] = port
-	}
-
-	// 解析公网 IP 列表
-	for i, ipStr := range tomlCfg.EgressIPs {
-		if i >= 16 {
-			break
-		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid egress_ip[%d]: %s", i, ipStr)
-		}
-		cfg.EgressIPs[i] = ipToUint32(ip)
-	}
-
-	return cfg, nil
-}
-
-// SyncNATConfig 将 NAT 配置同步到 eBPF Map
-func (c *Config) SyncNATConfig(vpnConfigMap *ebpf.Map) error {
-	if vpnConfigMap == nil {
-		return fmt.Errorf("vpnConfigMap is nil")
-	}
-	if c.NATConfig == nil {
-		return fmt.Errorf("NATConfig is nil")
-	}
-
-	// 将 NATConfig 转换为字节（使用网络字节序 BigEndian）
-	value := make([]byte, 256) // sizeof(vpn_global_config) = 256 字节
-	binary.BigEndian.PutUint64(value[0:8], c.NATConfig.TimeoutNS)
-	binary.BigEndian.PutUint32(value[8:12], c.NATConfig.VPNServerIP)
-	binary.BigEndian.PutUint16(value[12:14], c.NATConfig.VPNPort)
-	binary.BigEndian.PutUint16(value[14:16], c.NATConfig.PortStart)
-	binary.BigEndian.PutUint16(value[16:18], c.NATConfig.PortEnd)
-
-	// 写入预留端口
-	for i := 0; i < 32; i++ {
-		binary.BigEndian.PutUint16(value[18+i*2:18+i*2+2], c.NATConfig.ReservedPorts[i])
-	}
-	binary.BigEndian.PutUint16(value[18+64:18+64+2], c.NATConfig.ReservedCount)
-
-	// 写入网卡配置
-	value[82] = c.NATConfig.IngressIface
-	value[83] = c.NATConfig.EgressIface
-	value[84] = c.NATConfig.EgressIPCount
-
-	// 写入公网 IP 列表
-	for i := 0; i < 16; i++ {
-		binary.BigEndian.PutUint32(value[88+i*4:88+i*4+4], c.NATConfig.EgressIPs[i])
-	}
-
-	key := uint32(0)
-	return vpnConfigMap.Put(&key, value)
 }

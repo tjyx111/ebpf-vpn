@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ifaceName = flag.String("iface", "eth0", "Network interface to attach XDP program")
+	ifaceName  = flag.String("iface", "eth0", "Network interface to attach XDP program")
 	configPath = flag.String("config", "config.toml", "Path to configuration file")
 )
 
@@ -33,7 +33,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-		cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.MTU, cfg.VpnConfig.Flags, cfg.VpnConfig.MirrorSampleRate, len(cfg.CaptureRules))
+		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules))
 
 	// 加载 XDP 程序
 	program, err := xdp.Load(*ifaceName)
@@ -42,8 +42,8 @@ func main() {
 	}
 	defer program.Close()
 
-	// 同步配置到 eBPF Map
-	if err := cfg.VpnConfig.SyncToMap(program.ConfigMap()); err != nil {
+	// 同步统一配置到 eBPF Map
+	if err := cfg.UnifiedConfig.SyncToMap(program.UnifiedConfigMap()); err != nil {
 		log.Fatalf("Failed to sync config to map: %v", err)
 	}
 	log.Println("Config synced to eBPF map")
@@ -54,15 +54,7 @@ func main() {
 	}
 	log.Printf("Synced %d capture rules to eBPF map", len(cfg.CaptureRules))
 
-	// 同步 NAT 配置到 eBPF Map
-	if cfg.NATConfig != nil {
-		if err := cfg.SyncNATConfig(program.VpnConfigMap()); err != nil {
-			log.Fatalf("Failed to sync NAT config to map: %v", err)
-		}
-		log.Println("NAT config synced to eBPF map")
-	}
-
-	// 启动 Ring Buffer 消费器
+	// 启动 Ring Buffer 消费者
 	consumer, err := packet.NewConsumer(program.EventsRingbuf())
 	if err != nil {
 		log.Fatalf("Failed to create packet consumer: %v", err)
@@ -73,7 +65,7 @@ func main() {
 
 	// 启动配置热加载
 	stopWatcher := make(chan struct{})
-	go watchConfig(*configPath, program.ConfigMap(), program.CaptureRuleMap(), stopWatcher)
+	go watchConfig(*configPath, program.UnifiedConfigMap(), program.CaptureRuleMap(), stopWatcher)
 	defer close(stopWatcher)
 
 	log.Println("XDP loader is running. Press Ctrl+C to stop...")
@@ -122,7 +114,7 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 					continue
 				}
 
-				if err := cfg.VpnConfig.SyncToMap(configMap); err != nil {
+				if err := cfg.UnifiedConfig.SyncToMap(configMap); err != nil {
 					log.Printf("Failed to sync new config: %v", err)
 					continue
 				}
@@ -133,7 +125,7 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 				}
 
 				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-					cfg.VpnConfig.UDPEchoPort, cfg.VpnConfig.MTU, cfg.VpnConfig.Flags, cfg.VpnConfig.MirrorSampleRate, len(cfg.CaptureRules))
+					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules))
 			}
 
 		case err, ok := <-watcher.Errors:
