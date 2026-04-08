@@ -10,8 +10,6 @@
 #include <xdp/app/trace.h>
 #include <xdp/common/all.h>
 
-#define UDP_ECHO_PORT 18080
-
 // 引入结构体定义
 #include <xdp/common/vpn_config.h>
 #include <xdp/common/capture_rule.h>
@@ -145,19 +143,6 @@ int xdp_gateway(struct xdp_md *ctx) {
         }
     }
 
-    // AF_XDP 重定向
-    if (cfg_flag_enabled(cfg, CFG_FLAG_AFXDP_REDIRECT)) {
-        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
-            __u32 index = 0;
-            return bpf_redirect_map(&xsks_map, index, 0);
-        }
-    }
-
-    // ICMP
-    if (ip->protocol == IPPROTO_ICMP) {
-        return XDP_PASS;
-    }
-
     // UDP Echo
     if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)(ip + 1);
@@ -172,6 +157,19 @@ int xdp_gateway(struct xdp_md *ctx) {
                 return ret;
             }
         }
+    }
+
+    // AF_XDP 重定向
+    if (cfg_flag_enabled(cfg, CFG_FLAG_AFXDP_REDIRECT)) {
+        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
+            __u32 index = 0;
+            return bpf_redirect_map(&xsks_map, index, 0);
+        }
+    }
+
+    // ICMP
+    if (ip->protocol == IPPROTO_ICMP) {
+        return XDP_PASS;
     }
 
     return XDP_PASS;
