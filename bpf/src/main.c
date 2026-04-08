@@ -216,7 +216,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     if (cfg->reserved_count > 15 && cfg->reserved_ports[15] == outer_src_port)
         { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); return XDP_PASS; }
 
-    // 7. 选择公网 IP（通过 hash）
+    // 7. 选择公网 IP（通过 hash，直接比较选择）
     __u32 ip_count = cfg->egress_ip_count;
     if (ip_count == 0) {
         bpf_trace_printk("No egress IPs configured\n", sizeof("No egress IPs configured\n"));
@@ -224,7 +224,24 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     }
 
     __u32 ip_index = inner_ip->saddr % ip_count;
-    __u32 outer_src_ip = cfg->egress_ips[ip_index];
+    __u32 outer_src_ip;
+    // 直接展开选择，避免动态索引
+    if (ip_index == 0) outer_src_ip = cfg->egress_ips[0];
+    else if (ip_index == 1) outer_src_ip = cfg->egress_ips[1];
+    else if (ip_index == 2) outer_src_ip = cfg->egress_ips[2];
+    else if (ip_index == 3) outer_src_ip = cfg->egress_ips[3];
+    else if (ip_index == 4) outer_src_ip = cfg->egress_ips[4];
+    else if (ip_index == 5) outer_src_ip = cfg->egress_ips[5];
+    else if (ip_index == 6) outer_src_ip = cfg->egress_ips[6];
+    else if (ip_index == 7) outer_src_ip = cfg->egress_ips[7];
+    else if (ip_index == 8) outer_src_ip = cfg->egress_ips[8];
+    else if (ip_index == 9) outer_src_ip = cfg->egress_ips[9];
+    else if (ip_index == 10) outer_src_ip = cfg->egress_ips[10];
+    else if (ip_index == 11) outer_src_ip = cfg->egress_ips[11];
+    else if (ip_index == 12) outer_src_ip = cfg->egress_ips[12];
+    else if (ip_index == 13) outer_src_ip = cfg->egress_ips[13];
+    else if (ip_index == 14) outer_src_ip = cfg->egress_ips[14];
+    else outer_src_ip = cfg->egress_ips[15];
 
     bpf_trace_printk("Selected public IP: %x (index=%d)\n",
                      sizeof("Selected public IP: %x (index=%d)\n"),

@@ -99,7 +99,7 @@ struct unified_config {
     __u8 reserved4;
     __u32 egress_ips[16];  // 出口网卡的公网 IP 列表（最多16个）
 
-    __u8 reserved5[8];
+    __u8 reserved5[12];
 } __attribute__((packed));
 
 #endif // UNIFIED_CONFIG_H
