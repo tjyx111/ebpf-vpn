@@ -7,7 +7,7 @@ trace_enabled = true
 afxdp_redirect = false
 udp_echo_enabled = true
 forwarding_enabled = false
-nat_enabled = false
+nat_enabled = true
 mirror_enabled = true
 
 [tracing]
@@ -21,4 +21,24 @@ mirror_sample_rate = 100
 name = "udp echo"
 dst_port = 28080
 protocol = "udp"
+
+# NAT 配置
+[nat]
+vpn_server_ip = "192.168.1.1"      # VPN 服务器 IP
+vpn_port = 18080               # VPN 端口
+port_start = 10000             # 端口范围起始
+port_end = 65535               # 端口范围结束
+reserved_ports = [18080, 28080, 22, 80, 443, 3389]  # 预留端口
+timeout = 60                    # 超时时间（秒）
+
+# 网卡映射配置
+ingress_iface = 0      # 入口网卡 eth0
+egress_iface = 2       # 出口网卡 eth2
+
+# 出口网卡的公网 IP 列表
+egress_ips = [
+    "192.168.56.103",    # eth2 的第1个公网 IP
+    "192.168.56.104",    # eth2 的第2个公网 IP
+]
+
 

@@ -73,9 +73,14 @@ func (p *Program) Close() error {
 	return nil
 }
 
-// ConfigMap 获取配置 Map
+// ConfigMap 获取配置 Map (旧的 vpn_config)
 func (p *Program) ConfigMap() *ebpf.Map {
 	return p.objs.ConfigMap
+}
+
+// VpnConfigMap 获取 VPN 全局配置 Map
+func (p *Program) VpnConfigMap() *ebpf.Map {
+	return p.objs.VpnConfigMap
 }
 
 // EventsRingbuf 获取事件 Ring Buffer

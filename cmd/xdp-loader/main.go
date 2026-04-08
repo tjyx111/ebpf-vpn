@@ -54,6 +54,14 @@ func main() {
 	}
 	log.Printf("Synced %d capture rules to eBPF map", len(cfg.CaptureRules))
 
+	// 同步 NAT 配置到 eBPF Map
+	if cfg.NATConfig != nil {
+		if err := cfg.SyncNATConfig(program.VpnConfigMap()); err != nil {
+			log.Fatalf("Failed to sync NAT config to map: %v", err)
+		}
+		log.Println("NAT config synced to eBPF map")
+	}
+
 	// 启动 Ring Buffer 消费器
 	consumer, err := packet.NewConsumer(program.EventsRingbuf())
 	if err != nil {
