@@ -49,9 +49,11 @@ type TOMLConfig struct {
 		ForwardingEnabled bool `toml:"forwarding_enabled"`
 		NATEnabled        bool `toml:"nat_enabled"`
 		MirrorEnabled     bool `toml:"mirror_enabled"`
+		DebugEnabled      bool `toml:"debug_enabled"`
 	} `toml:"features"`
 	Tracing struct {
 		MirrorSampleRate uint8 `toml:"mirror_sample_rate"`
+		LogFlags         uint32 `toml:"log_flags"`
 	} `toml:"tracing"`
 	CaptureRules []CaptureRuleTOML `toml:"capture_rules"`
 	NAT         struct {
@@ -70,7 +72,8 @@ type TOMLConfig struct {
 // UnifiedConfig 对应 C 端的 unified_config 结构
 type UnifiedConfig struct {
 	Flags            uint8
-	Reserved1        [7]uint8
+	Reserved1        [3]uint8
+	LogFlags         uint32 // 日志标志位
 	UDPEchoPort      uint16
 	Reserved2        uint16
 	MTU              uint32
@@ -81,7 +84,7 @@ type UnifiedConfig struct {
 	VPNPort          uint16
 	PortStart        uint16
 	PortEnd          uint16
-	ReservedPorts    [32]uint16
+	ReservedPorts    [8]uint16
 	ReservedCount    uint16
 	IngressIface     uint8
 	EgressIface      uint8
@@ -131,7 +134,8 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 		UDPEchoPort:      uint16(tomlCfg.Network.UDPEchoPort),
 		MTU:              tomlCfg.Network.MTU,
 		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
-		Reserved1:        [7]uint8{0, 0, 0, 0, 0, 0, 0},
+		LogFlags:         tomlCfg.Tracing.LogFlags,
+		Reserved1:        [3]uint8{0, 0, 0},
 		Reserved2:        0,
 		Reserved3:        [3]uint8{0, 0, 0},
 		Reserved4:        0,
@@ -157,6 +161,9 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	if tomlCfg.Features.MirrorEnabled {
 		cfg.Flags |= 1 << 5 // CFG_FLAG_MIRROR_ENABLED
 	}
+	if tomlCfg.Features.DebugEnabled {
+		cfg.Flags |= 1 << 6 // CFG_FLAG_DEBUG_ENABLED
+	}
 
 	// NAT 配置
 	cfg.TimeoutNS = uint64(tomlCfg.NAT.Timeout) * 1000000000 // 转换为纳秒
@@ -178,7 +185,7 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 
 	// 解析预留端口
 	for i, port := range tomlCfg.NAT.ReservedPorts {
-		if i >= 32 {
+		if i >= 8 {
 			break
 		}
 		cfg.ReservedPorts[i] = port
@@ -296,43 +303,46 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 
 	key := uint32(0) // CFG_KEY
 
-	// 将 UnifiedConfig 转换为字节（使用网络字节序 BigEndian）
-	// sizeof(unified_config) = 1+7+2+2+4+1+3+8+4+2+2+2+64+2+1+1+1+1+64+8 = 184 字节
-	value := make([]byte, 184)
+	// 将 UnifiedConfig 转换为字节
+	// sizeof(unified_config) = 1+3+4+2+2+4+1+3+8+4+2+2+2+16+2+1+1+1+1+64+8 = 136 字节
+	value := make([]byte, 136)
 
 	offset := 0
 	value[offset] = c.Flags
-	offset += 8 // flags + reserved1
+	offset += 4 // flags + reserved1
 
-	binary.BigEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
+	binary.LittleEndian.PutUint32(value[offset:offset+4], c.LogFlags)
+	offset += 4 // log_flags
+
+	binary.LittleEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
 	offset += 4 // udp_echo_port + reserved2
 
-	binary.BigEndian.PutUint32(value[offset:offset+4], c.MTU)
+	binary.LittleEndian.PutUint32(value[offset:offset+4], c.MTU)
 	offset += 4
 
 	value[offset] = c.MirrorSampleRate
 	offset += 4 // mirror_sample_rate + reserved3
 
-	binary.BigEndian.PutUint64(value[offset:offset+8], c.TimeoutNS)
+	binary.LittleEndian.PutUint64(value[offset:offset+8], c.TimeoutNS)
 	offset += 8
 
 	binary.BigEndian.PutUint32(value[offset:offset+4], c.VPNServerIP)
 	offset += 4
 
-	binary.BigEndian.PutUint16(value[offset:offset+2], c.VPNPort)
+	binary.LittleEndian.PutUint16(value[offset:offset+2], c.VPNPort)
 	offset += 2
-	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortStart)
+	binary.LittleEndian.PutUint16(value[offset:offset+2], c.PortStart)
 	offset += 2
-	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortEnd)
+	binary.LittleEndian.PutUint16(value[offset:offset+2], c.PortEnd)
 	offset += 2
 
 	// 预留端口
-	for i := 0; i < 32; i++ {
-		binary.BigEndian.PutUint16(value[offset+i*2:offset+i*2+2], c.ReservedPorts[i])
+	for i := 0; i < 8; i++ {
+		binary.LittleEndian.PutUint16(value[offset+i*2:offset+i*2+2], c.ReservedPorts[i])
 	}
-	offset += 64
+	offset += 16
 
-	binary.BigEndian.PutUint16(value[offset:offset+2], c.ReservedCount)
+	binary.LittleEndian.PutUint16(value[offset:offset+2], c.ReservedCount)
 	offset += 2
 
 	value[offset] = c.IngressIface

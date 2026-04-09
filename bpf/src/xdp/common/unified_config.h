@@ -10,6 +10,14 @@
 #define CFG_FLAG_FORWARDING_ENABLED    (1 << 3)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
 #define CFG_FLAG_MIRROR_ENABLED        (1 << 5)
+#define CFG_FLAG_DEBUG_ENABLED          (1 << 6)
+
+// 日志标志位定义（用于控制 bpf_trace_printk 输出）
+#define LOG_DEBUG_PKG                   (1 << 0)  // 调试数据包处理
+#define LOG_UDPECHO                     (1 << 1)  // UDP Echo 相关日志
+#define LOG_SNAT                        (1 << 2)  // SNAT 处理日志
+#define LOG_DNAT                        (1 << 3)  // DNAT 处理日志
+#define LOG_ALL                         0xFF      // 所有日志
 
 // VPN 头部（简化版）
 struct vpn_header {
@@ -74,7 +82,8 @@ struct dnat_entry {
 struct unified_config {
     // 功能标志位
     __u8 flags;
-    __u8 reserved1[7];
+    __u8 reserved1[3];
+    __u32 log_flags;  // 日志标志位（控制 bpf_trace_printk 输出）
 
     // UDP Echo 配置
     __u16 udp_echo_port;
@@ -89,7 +98,7 @@ struct unified_config {
     __u16 vpn_port;         // VPN 端口 (18080)
     __u16 port_start;       // 端口范围起始 (10000)
     __u16 port_end;         // 端口范围结束 (65535)
-    __u16 reserved_ports[32]; // 预留端口列表
+    __u16 reserved_ports[8]; // 预留端口列表（最多8个）
     __u16 reserved_count;   // 预留端口数量
 
     // 网卡映射配置
@@ -100,6 +109,41 @@ struct unified_config {
     __u32 egress_ips[16];  // 出口网卡的公网 IP 列表（最多16个）
 
     __u8 reserved5[12];
+} __attribute__((packed));
+
+// Debug 事件结构体（通过 Ring Buffer 发送到用户空间）
+struct debug_event {
+    // 外层以太网头
+    __u8 outer_src_mac[6];
+    __u8 outer_dst_mac[6];
+
+    // 外层 IP
+    __u32 outer_src_ip;
+    __u32 outer_dst_ip;
+    __u8  outer_protocol;
+    __u16 outer_src_port;
+    __u16 outer_dst_port;
+
+    // VPN 头
+    __u8  vpn_first_byte;
+    __u8  vpn_next_proto;
+    __u16 vpn_flags;
+    __u32 vpn_session_id;
+
+    // 内层 IP
+    __u32 inner_src_ip;
+    __u32 inner_dst_ip;
+    __u8  inner_protocol;
+    __u16 inner_src_port;
+    __u16 inner_dst_port;
+
+    // 路由信息
+    __u32 fib_ifindex;        // 出接口索引
+    __u8  fib_src_mac[6];     // 源 MAC
+    __u8  fib_dst_mac[6];     // 目标 MAC (下一跳)
+    __s32 fib_result;         // FIB 查询结果
+
+    __u64 timestamp;
 } __attribute__((packed));
 
 #endif // UNIFIED_CONFIG_H

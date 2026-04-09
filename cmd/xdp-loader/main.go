@@ -10,6 +10,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/fsnotify/fsnotify"
 	"ebpf-vpn/internal/config"
+	"ebpf-vpn/internal/logging"
 	"ebpf-vpn/internal/packet"
 	"ebpf-vpn/internal/xdp"
 )
@@ -32,8 +33,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules))
+	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d, LogFlags=0x%02x",
+		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 
 	// 加载 XDP 程序
 	program, err := xdp.Load(*ifaceName)
@@ -54,14 +55,27 @@ func main() {
 	}
 	log.Printf("Synced %d capture rules to eBPF map", len(cfg.CaptureRules))
 
+	// 创建日志记录器
+	logger := logging.NewLogger(cfg.UnifiedConfig.LogFlags)
+
 	// 启动 Ring Buffer 消费者
-	consumer, err := packet.NewConsumer(program.EventsRingbuf())
+	consumer, err := packet.NewConsumer(program.EventsRingbuf(), logger)
 	if err != nil {
 		log.Fatalf("Failed to create packet consumer: %v", err)
 	}
 	consumer.Start()
 	defer consumer.Stop()
 	log.Println("Packet consumer started")
+
+	// 启动 Debug Ring Buffer 消费者
+	debugConsumer, err := packet.NewDebugConsumer(program.DebugEvents(), logger)
+	if err != nil {
+		log.Printf("Failed to create debug consumer: %v", err)
+	} else {
+		debugConsumer.Start()
+		defer debugConsumer.Stop()
+		log.Println("Debug consumer started")
+	}
 
 	// 启动配置热加载
 	stopWatcher := make(chan struct{})
@@ -124,8 +138,8 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 					continue
 				}
 
-				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d",
-					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules))
+				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d, LogFlags=0x%02x",
+					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 			}
 
 		case err, ok := <-watcher.Errors:

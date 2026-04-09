@@ -3,10 +3,15 @@
 
 #include <linux/types.h>
 #include <xdp/utils/csum.h>
+#include <xdp/common/unified_config.h>
 
 #define MTU 1500
 
-static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, struct udphdr *udp, void *data_end) {
+static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, struct udphdr *udp, void *data_end, struct unified_config *cfg) {
+    if (cfg->log_flags & LOG_UDPECHO) {
+        bpf_trace_printk("UDP Echo enter", sizeof("UDP Echo enter"));
+    }
+
     if (eth == NULL || ip == NULL || udp == NULL) {
         return XDP_PASS;
     }

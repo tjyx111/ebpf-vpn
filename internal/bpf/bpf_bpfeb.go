@@ -62,6 +62,7 @@ type bpfProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
 	CaptureRuleMap   *ebpf.MapSpec `ebpf:"capture_rule_map"`
+	DebugEvents      *ebpf.MapSpec `ebpf:"debug_events"`
 	DnatMap          *ebpf.MapSpec `ebpf:"dnat_map"`
 	EventsRingbuf    *ebpf.MapSpec `ebpf:"events_ringbuf"`
 	FilterRuleMap    *ebpf.MapSpec `ebpf:"filter_rule_map"`
@@ -97,6 +98,7 @@ func (o *bpfObjects) Close() error {
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
 	CaptureRuleMap   *ebpf.Map `ebpf:"capture_rule_map"`
+	DebugEvents      *ebpf.Map `ebpf:"debug_events"`
 	DnatMap          *ebpf.Map `ebpf:"dnat_map"`
 	EventsRingbuf    *ebpf.Map `ebpf:"events_ringbuf"`
 	FilterRuleMap    *ebpf.Map `ebpf:"filter_rule_map"`
@@ -108,6 +110,7 @@ type bpfMaps struct {
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.CaptureRuleMap,
+		m.DebugEvents,
 		m.DnatMap,
 		m.EventsRingbuf,
 		m.FilterRuleMap,

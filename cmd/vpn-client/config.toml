@@ -1,0 +1,20 @@
+# VPN 客户端配置
+
+[client]
+local_ip = "192.168.1.100"       # 本机 IP (gVisor netstack)
+local_port_start = 10000         # 本地端口范围起始
+local_port_end = 60000           # 本地端口范围结束
+
+[target]
+server_ip = "192.168.1.1"        # VPN 服务器 IP (XDP 所在机器)
+server_port = 28080              # VPN 服务器 UDP 端口
+tcp_target_ip = "10.0.0.1"       # TCP 目标 IP (通过 VPN 访问的服务)
+tcp_target_port = 80             # TCP 目标端口
+
+[vpn]
+session_id = 12345               # VPN 会话 ID
+timeout = 60                     # 超时时间(秒)
+
+[logging]
+enabled = true
+level = "debug"

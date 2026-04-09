@@ -7,20 +7,31 @@ trace_enabled = true
 afxdp_redirect = false
 udp_echo_enabled = true
 forwarding_enabled = false
-nat_enabled = true
-mirror_enabled = true
+nat_enabled = false
+mirror_enabled = false
+debug_enabled = false
 
 [tracing]
 mirror_sample_rate = 100
+log_flags = 1  # 日志标志位（0=关闭所有日志，1=DEBUG_PKG, 2=UDPECHO, 4=SNAT, 8=DNAT, 255=ALL）
 
 # 抓包规则配置
 # 支持多条规则，只要匹配任一规则就会抓包
 # 如果没有任何规则，则抓取所有数据包
 
 [[capture_rules]]
-name = "udp echo"
+name = "udp echo input"
+src_port = 28080
+protocol = "udp"
+
+[[capture_rules]]
+name = "udp echo output"
 dst_port = 28080
 protocol = "udp"
+
+[[capture_rules]]                                                                                                                                                                                                          
+name = "all icmp"                                                                                                                                                                                                          
+protocol = "icmp"   
 
 # NAT 配置
 [nat]
