@@ -11,6 +11,7 @@
 #include <xdp/app/udp_echo.h>
 #include <xdp/app/trace.h>
 #include <xdp/common/all.h>
+#include <xdp/utils/csum.h>
 
 // 引入结构体定义
 #include <xdp/common/unified_config.h>
@@ -53,6 +54,30 @@ struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024);  // 256KB
 } debug_events SEC(".maps");
+
+// ICMP SNAT Map（key: {inner_src_ip, inner_dst_ip, icmp_id}）
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(key_size, sizeof(struct icmp_conn_key));
+    __uint(value_size, sizeof(struct icmp_snat_entry));
+    __uint(max_entries, 4096);
+} icmp_snat_map SEC(".maps");
+
+// ICMP DNAT Map（key: {wan_ip, inner_dst_ip, icmp_id}）
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(key_size, sizeof(struct icmp_dnat_key));
+    __uint(value_size, sizeof(struct icmp_dnat_entry));
+    __uint(max_entries, 4096);
+} icmp_dnat_map SEC(".maps");
+
+// 接口配置 Map（key: ifs_index）
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(struct ifs_ip_config));
+    __uint(max_entries, 8);  // 最多 8 个接口
+} ifs_config_map SEC(".maps");
 
 // Helper 函数：匹配单条抓包规则
 static __always_inline int match_single_rule(struct capture_rule *rule,
@@ -533,6 +558,374 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     return XDP_DROP;
 }
 
+// ========== ICMP VPN 处理函数 ==========
+
+// 处理 ICMP Echo Reply（出站 DNAT + VPN 封装）
+static __always_inline int handle_icmp_reply(struct xdp_md *ctx,
+                                             struct iphdr *ip,
+                                             struct icmphdr *icmp,
+                                             void *data_end,
+                                             struct unified_config *cfg) {
+    if (cfg->log_flags & LOG_DNAT) {
+        bpf_trace_printk("[ICMP REPLY] Checking DNAT\n", sizeof("[ICMP REPLY] Checking DNAT\n"));
+    }
+
+    // 1. 提取 ICMP ID
+    __u16 icmp_id = bpf_ntohs(icmp->un.echo.id);
+
+    // 2. 查找 ICMP DNAT Map
+    struct icmp_dnat_key dnat_key = {
+        .wan_ip = ip->saddr,
+        .inner_dst_ip = ip->daddr,
+        .icmp_id = icmp_id,
+        .reserved = 0
+    };
+
+    struct icmp_dnat_entry *dnat = bpf_map_lookup_elem(&icmp_dnat_map, &dnat_key);
+    if (!dnat) {
+        if (cfg->log_flags & LOG_DNAT) {
+            bpf_trace_printk("[ICMP REPLY] No DNAT entry, pass to stack\n",
+                             sizeof("[ICMP REPLY] No DNAT entry, pass to stack\n"));
+        }
+        return XDP_PASS;  // 未找到 DNAT 条目，交给协议栈
+    }
+
+    if (cfg->log_flags & LOG_DNAT) {
+        bpf_trace_printk("[ICMP REPLY] DNAT found: %x -> %x\n",
+                         sizeof("[ICMP REPLY] DNAT found: %x -> %x\n"),
+                         ip->daddr, dnat->inner_src_ip);
+    }
+
+    // 3. DNAT: 修改目标 IP 为原始内层源 IP
+    __u32 old_dst = ip->daddr;
+    ip->daddr = dnat->inner_src_ip;
+
+    // 更新 ICMP 校验和（因为目标 IP 改变了）
+    icmp->checksum = csum_diff4(old_dst, ip->daddr, icmp->checksum);
+
+    if (cfg->log_flags & LOG_DNAT) {
+        bpf_trace_printk("[ICMP REPLY] DNAT: %x -> %x\n",
+                         sizeof("[ICMP REPLY] DNAT: %x -> %x\n"),
+                         old_dst, ip->daddr);
+    }
+
+    // 4. VPN 封装：需要添加 Eth(14) + IP(20) + UDP(8) + VPN_HDR(8) = 50 bytes
+    int encap_size = sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                     sizeof(struct udphdr) + sizeof(struct vpn_header);
+
+    // 向前移动数据包指针（为外层封装预留空间）
+    if (bpf_xdp_adjust_head(ctx, -encap_size)) {
+        if (cfg->log_flags & LOG_DNAT) {
+            bpf_trace_printk("[ICMP REPLY] Adjust head for encap failed\n",
+                             sizeof("[ICMP REPLY] Adjust head for encap failed\n"));
+        }
+        return XDP_PASS;
+    }
+
+    // 重新获取数据包指针
+    void *new_data = (void *)(long)ctx->data;
+    void *new_data_end = (void *)(long)ctx->data_end;
+
+    // ===== 构建外层以太网头 =====
+    struct ethhdr *outer_eth = new_data;
+    if ((void *)(outer_eth + 1) > new_data_end) {
+        return XDP_PASS;
+    }
+
+    __builtin_memcpy(outer_eth->h_source, dnat->outer_dst_mac, 6);
+    __builtin_memcpy(outer_eth->h_dest, dnat->outer_src_mac, 6);
+    outer_eth->h_proto = bpf_htons(ETH_P_IP);
+
+    // ===== 构建外层 IP 头 =====
+    struct iphdr *outer_ip = (void *)(outer_eth + 1);
+    if ((void *)(outer_ip + 1) > new_data_end) {
+        return XDP_PASS;
+    }
+
+    outer_ip->version = 4;
+    outer_ip->ihl = 5;
+    outer_ip->tos = 0;
+    outer_ip->tot_len = bpf_htons(encap_size - sizeof(struct ethhdr) +
+                                   (ip->ihl * 4) + 64);  // 假设 ICMP 最大 64 字节
+    outer_ip->id = 0;
+    outer_ip->frag_off = 0;
+    outer_ip->ttl = 64;
+    outer_ip->protocol = IPPROTO_UDP;
+    outer_ip->check = 0;
+    outer_ip->saddr = dnat->outer_dst_ip;  // VPN 服务器 IP
+    outer_ip->daddr = dnat->outer_src_ip;  // 客户端 IP
+
+    // ===== 构建外层 UDP 头 =====
+    struct udphdr *outer_udp = (void *)(outer_ip + 1);
+    if ((void *)(outer_udp + 1) > new_data_end) {
+        return XDP_PASS;
+    }
+
+    outer_udp->source = dnat->outer_dst_port;
+    outer_udp->dest = dnat->outer_src_port;
+    outer_udp->len = bpf_htons(sizeof(struct vpn_header) +
+                               (ip->ihl * 4) + 64);  // UDP 载荷长度
+    outer_udp->check = 0;
+
+    // ===== 构建VPN头 =====
+    struct vpn_header *vpn = (void *)(outer_udp + 1);
+    if ((void *)(vpn + 1) > new_data_end) {
+        return XDP_PASS;
+    }
+
+    vpn->first_byte = VPN_MAGIC_VALUE;
+    vpn->next_protocol = dnat->vpn_next_proto;
+    vpn->flags = dnat->vpn_flags;
+    vpn->session_id = dnat->vpn_session_id;
+
+    if (cfg->log_flags & LOG_DNAT) {
+        bpf_trace_printk("[ICMP REPLY] Encap done, redirect to ifs=%d\n",
+                         sizeof("[ICMP REPLY] Encap done, redirect to ifs=%d\n"),
+                         dnat->ingress_ifindex);
+    }
+
+    // 5. 从入口接口发送回客户端
+    return bpf_redirect(dnat->ingress_ifindex, 0);
+}
+
+// 处理 VPN 封装的 ICMP Echo Request（入站解封装 + SNAT）
+// 前置条件（调用前已检查）：
+// 1. UDP 目标端口 == vpn_port (18080)
+// 2. VPN Magic == 0x90
+// 3. vpn->next_protocol == IPPROTO_ICMP
+// 4. icmp->type == ICMP_ECHO（主流程已检查）
+static __always_inline int handle_vpn_icmp_request(struct xdp_md *ctx,
+                                                   struct iphdr *outer_ip,
+                                                   struct udphdr *outer_udp,
+                                                   struct ethhdr *outer_eth,
+                                                   void *data_end,
+                                                   struct unified_config *cfg) {
+    if (cfg->log_flags & LOG_SNAT) {
+        bpf_trace_printk("[ICMP REQUEST] VPN packet detected\n",
+                         sizeof("[ICMP REQUEST] VPN packet detected\n"));
+    }
+
+    // 1. 提取 VPN 头（调用前已验证 Magic 和 next_protocol）
+    struct vpn_header *vpn = (void *)(outer_udp + 1);
+    if ((void *)(vpn + 1) > data_end)
+        return XDP_PASS;
+
+    // 2. 提取内层 ICMP 包
+    struct iphdr *inner_ip = (void *)(vpn + 1);
+    if ((void *)(inner_ip + 1) > data_end)
+        return XDP_PASS;
+
+    struct icmphdr *icmp = (void *)(inner_ip + 1);
+    if ((void *)(icmp + 1) > data_end)
+        return XDP_PASS;
+
+    // 3. 提取连接标识
+    __u16 icmp_id = bpf_ntohs(icmp->un.echo.id);
+
+    if (cfg->log_flags & LOG_SNAT) {
+        bpf_trace_printk("[ICMP REQUEST] inner: %x -> %x id=%d\n",
+                         sizeof("[ICMP REQUEST] inner: %x -> %x id=%d\n"),
+                         inner_ip->saddr, inner_ip->daddr, icmp_id);
+    }
+
+    // 5. 查找 SNAT 条目
+    struct icmp_conn_key conn_key = {
+        .inner_src_ip = inner_ip->saddr,
+        .inner_dst_ip = inner_ip->daddr,
+        .icmp_id = icmp_id,
+        .reserved = 0
+    };
+
+    struct icmp_snat_entry *snat = bpf_map_lookup_elem(&icmp_snat_map, &conn_key);
+
+    if (snat) {
+        // 已有会话：直接使用保存的信息进行 SNAT + 转发
+        if (cfg->log_flags & LOG_SNAT) {
+            bpf_trace_printk("[ICMP REQUEST] Existing session: wan_ip=%x ifs=%d\n",
+                             sizeof("[ICMP REQUEST] Existing session: wan_ip=%x ifs=%d\n"),
+                             snat->wan_ip, snat->ifs_index);
+        }
+
+        // 执行 SNAT
+        __u32 old_src = inner_ip->saddr;
+        inner_ip->saddr = snat->wan_ip;
+
+        // 更新 ICMP 校验和（因为源 IP 改变了）
+        icmp->checksum = csum_diff4(old_src, inner_ip->saddr, icmp->checksum);
+
+        // 移除外层封装：Eth(14) + IP(20) + UDP(8) + VPN_HDR(8) = 50 bytes
+        int offset = sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                     sizeof(struct udphdr) + sizeof(struct vpn_header);
+        if (bpf_xdp_adjust_head(ctx, offset)) {
+            if (cfg->log_flags & LOG_SNAT) {
+                bpf_trace_printk("[ICMP REQUEST] Adjust head failed\n",
+                                 sizeof("[ICMP REQUEST] Adjust head failed\n"));
+            }
+            return XDP_PASS;
+        }
+
+        // 重新获取数据包指针
+        void *new_data = (void *)(long)ctx->data;
+        void *new_data_end = (void *)(long)ctx->data_end;
+
+        // 构建新的以太网头
+        struct ethhdr *new_eth = new_data;
+        if ((void *)(new_eth + 1) > new_data_end) {
+            return XDP_PASS;
+        }
+
+        // 复制保存的 MAC 地址
+        __builtin_memcpy(new_eth->h_source, snat->src_mac, 6);
+        __builtin_memcpy(new_eth->h_dest, snat->dst_mac, 6);
+        new_eth->h_proto = bpf_htons(ETH_P_IP);
+
+        if (cfg->log_flags & LOG_SNAT) {
+            bpf_trace_printk("[ICMP REQUEST] SNAT done: %x -> %x, redirect to ifs=%d\n",
+                             sizeof("[ICMP REQUEST] SNAT done: %x -> %x, redirect to ifs=%d\n"),
+                             conn_key.inner_src_ip, snat->wan_ip, snat->ifs_index);
+        }
+
+        // 转发到出口接口
+        return bpf_redirect(snat->ifs_index, 0);
+    }
+
+    // 新会话：FIB 查找
+    __u32 wan_ip;
+    __u32 ifs_index;
+
+    struct bpf_fib_lookup fib_params = {
+        .family = AF_INET,
+        .tos = inner_ip->tos,
+        .l4_protocol = IPPROTO_ICMP,
+        .ipv4_dst = inner_ip->daddr,
+        .ifindex = ctx->ingress_ifindex,
+    };
+
+    int rc = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), BPF_FIB_LOOKUP_OUTPUT);
+    if (rc != 0) {
+        if (cfg->log_flags & LOG_SNAT) {
+            bpf_trace_printk("[ICMP REQUEST] FIB lookup failed: %d\n",
+                             sizeof("[ICMP REQUEST] FIB lookup failed: %d\n"),
+                             rc);
+        }
+        return XDP_PASS;
+    }
+
+    ifs_index = fib_params.ifindex;
+
+    // 选择 WAN IP（简化版：使用第一个 IP）
+    if (cfg->egress_ip_count > 0) {
+        wan_ip = cfg->egress_ips[0];
+    } else {
+        if (cfg->log_flags & LOG_SNAT) {
+            bpf_trace_printk("[ICMP REQUEST] No egress IPs configured\n",
+                             sizeof("[ICMP REQUEST] No egress IPs configured\n"));
+        }
+        return XDP_PASS;
+    }
+
+    if (cfg->log_flags & LOG_SNAT) {
+        bpf_trace_printk("[ICMP REQUEST] New session: wan_ip=%x ifs=%d\n",
+                         sizeof("[ICMP REQUEST] New session: wan_ip=%x ifs=%d\n"),
+                         wan_ip, ifs_index);
+    }
+
+    // 创建 SNAT 条目（保存完整转发信息）
+    struct icmp_snat_entry new_snat = {
+        .wan_ip = wan_ip,
+        .ifs_index = ifs_index,
+        .timestamp = bpf_ktime_get_ns(),
+    };
+
+    __builtin_memcpy(new_snat.src_mac, fib_params.smac, sizeof(new_snat.src_mac));
+    __builtin_memcpy(new_snat.dst_mac, fib_params.dmac, sizeof(new_snat.dst_mac));
+
+    bpf_map_update_elem(&icmp_snat_map, &conn_key, &new_snat, BPF_ANY);
+
+    // 创建 DNAT 条目（保存完整 VPN 封装信息）
+    struct icmp_dnat_key dnat_key = {
+        .wan_ip = wan_ip,
+        .inner_dst_ip = inner_ip->daddr,
+        .icmp_id = icmp_id,
+        .reserved = 0
+    };
+
+    struct icmp_dnat_entry new_dnat = {
+        .inner_src_ip = inner_ip->saddr,
+
+        // 保存 VPN 头信息
+        .vpn_session_id = vpn->session_id,
+        .vpn_next_proto = vpn->next_protocol,
+        .vpn_flags = vpn->flags,
+        .reserved1 = 0,
+
+        // 保存外层 IP/UDP 信息
+        .outer_src_ip = outer_ip->saddr,
+        .outer_dst_ip = outer_ip->daddr,
+        .outer_src_port = outer_udp->source,
+        .outer_dst_port = outer_udp->dest,
+
+        // 保存入口接口信息（出站时从同一接口发送）
+        .ingress_ifindex = ctx->ingress_ifindex,
+
+        .timestamp = bpf_ktime_get_ns(),
+    };
+
+    // 保存外层以太网头信息
+    __builtin_memcpy(new_dnat.outer_src_mac, outer_eth->h_source, 6);
+    __builtin_memcpy(new_dnat.outer_dst_mac, outer_eth->h_dest, 6);
+
+    bpf_map_update_elem(&icmp_dnat_map, &dnat_key, &new_dnat, BPF_ANY);
+
+    // 6. 执行 SNAT
+    __u32 old_src = inner_ip->saddr;
+    inner_ip->saddr = wan_ip;
+
+    // 更新 ICMP 校验和（因为源 IP 改变了）
+    icmp->checksum = csum_diff4(old_src, inner_ip->saddr, icmp->checksum);
+
+    if (cfg->log_flags & LOG_SNAT) {
+        bpf_trace_printk("[ICMP REQUEST] SNAT done: %x -> %x\n",
+                         sizeof("[ICMP REQUEST] SNAT done: %x -> %x\n"),
+                         conn_key.inner_src_ip, wan_ip);
+    }
+
+    // 7. 移除外层封装：Eth(14) + IP(20) + UDP(8) + VPN_HDR(8) = 50 bytes
+    int offset = sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                 sizeof(struct udphdr) + sizeof(struct vpn_header);
+    if (bpf_xdp_adjust_head(ctx, offset)) {
+        if (cfg->log_flags & LOG_SNAT) {
+            bpf_trace_printk("[ICMP REQUEST] Adjust head failed\n",
+                             sizeof("[ICMP REQUEST] Adjust head failed\n"));
+        }
+        return XDP_PASS;
+    }
+
+    // 重新获取数据包指针
+    void *new_data = (void *)(long)ctx->data;
+    void *new_data_end = (void *)(long)ctx->data_end;
+
+    // 构建新的以太网头
+    struct ethhdr *new_eth = new_data;
+    if ((void *)(new_eth + 1) > new_data_end) {
+        return XDP_PASS;
+    }
+
+    // 复制 FIB 返回的 MAC 地址
+    __builtin_memcpy(new_eth->h_source, fib_params.smac, 6);
+    __builtin_memcpy(new_eth->h_dest, fib_params.dmac, 6);
+    new_eth->h_proto = bpf_htons(ETH_P_IP);
+
+    if (cfg->log_flags & LOG_SNAT) {
+        bpf_trace_printk("[ICMP REQUEST] Decap done, redirect to ifs=%d\n",
+                         sizeof("[ICMP REQUEST] Decap done, redirect to ifs=%d\n"),
+                         ifs_index);
+    }
+
+    // 8. 转发到出口接口
+    return bpf_redirect(ifs_index, 0);
+}
+
 SEC("xdp")
 int xdp_gateway(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
@@ -600,6 +993,20 @@ int xdp_gateway(struct xdp_md *ctx) {
                 if ((void *)(vpn + 1) > data_end) return XDP_PASS;
 
                 if ((vpn->first_byte & VPN_MAGIC_MASK) == VPN_MAGIC_VALUE) {
+                    // 检查是否是 ICMP VPN 包
+                    if (vpn->next_protocol == IPPROTO_ICMP) {
+                        // 提取内层 ICMP 包检查类型
+                        struct iphdr *inner_ip = (void *)(vpn + 1);
+                        if ((void *)(inner_ip + 1) > data_end) return XDP_PASS;
+
+                        struct icmphdr *icmp = (void *)(inner_ip + 1);
+                        if ((void *)(icmp + 1) > data_end) return XDP_PASS;
+
+                        // 只处理 Echo Request
+                        if (icmp->type == ICMP_ECHO) {
+                            return handle_vpn_icmp_request(ctx, ip, udp, eth, data_end, cfg);
+                        }
+                    }
                     return detect_and_log_snat(ctx, ip, udp, data_end, cfg);
                 }
             }
@@ -651,6 +1058,18 @@ int xdp_gateway(struct xdp_md *ctx) {
         if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
             __u32 index = 0;
             return bpf_redirect_map(&xsks_map, index, 0);
+        }
+    }
+
+    // ICMP VPN 处理
+    if (ip->protocol == IPPROTO_ICMP && (flags & CFG_FLAG_NAT_ENABLED)) {
+        struct icmphdr *icmp = (void *)(ip + 1);
+        if ((void *)(icmp + 1) > data_end)
+            return XDP_PASS;
+
+        // 处理 ICMP Echo Reply（出站 DNAT）
+        if (icmp->type == ICMP_ECHOREPLY) {
+            return handle_icmp_reply(ctx, ip, icmp, data_end, cfg);
         }
     }
 

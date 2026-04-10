@@ -66,6 +66,9 @@ type bpfMapSpecs struct {
 	DnatMap          *ebpf.MapSpec `ebpf:"dnat_map"`
 	EventsRingbuf    *ebpf.MapSpec `ebpf:"events_ringbuf"`
 	FilterRuleMap    *ebpf.MapSpec `ebpf:"filter_rule_map"`
+	IcmpDnatMap      *ebpf.MapSpec `ebpf:"icmp_dnat_map"`
+	IcmpSnatMap      *ebpf.MapSpec `ebpf:"icmp_snat_map"`
+	IfsConfigMap     *ebpf.MapSpec `ebpf:"ifs_config_map"`
 	SnatMap          *ebpf.MapSpec `ebpf:"snat_map"`
 	UnifiedConfigMap *ebpf.MapSpec `ebpf:"unified_config_map"`
 	XsksMap          *ebpf.MapSpec `ebpf:"xsks_map"`
@@ -102,6 +105,9 @@ type bpfMaps struct {
 	DnatMap          *ebpf.Map `ebpf:"dnat_map"`
 	EventsRingbuf    *ebpf.Map `ebpf:"events_ringbuf"`
 	FilterRuleMap    *ebpf.Map `ebpf:"filter_rule_map"`
+	IcmpDnatMap      *ebpf.Map `ebpf:"icmp_dnat_map"`
+	IcmpSnatMap      *ebpf.Map `ebpf:"icmp_snat_map"`
+	IfsConfigMap     *ebpf.Map `ebpf:"ifs_config_map"`
 	SnatMap          *ebpf.Map `ebpf:"snat_map"`
 	UnifiedConfigMap *ebpf.Map `ebpf:"unified_config_map"`
 	XsksMap          *ebpf.Map `ebpf:"xsks_map"`
@@ -114,6 +120,9 @@ func (m *bpfMaps) Close() error {
 		m.DnatMap,
 		m.EventsRingbuf,
 		m.FilterRuleMap,
+		m.IcmpDnatMap,
+		m.IcmpSnatMap,
+		m.IfsConfigMap,
 		m.SnatMap,
 		m.UnifiedConfigMap,
 		m.XsksMap,

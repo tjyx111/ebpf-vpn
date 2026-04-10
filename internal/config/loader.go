@@ -417,3 +417,51 @@ func (c *Config) SyncCaptureRulesToMap(captureRuleMap *ebpf.Map) error {
 	log.Printf("Synced %d capture rules to eBPF map", ruleCount)
 	return nil
 }
+
+// IfsIPConfig 接口 IP 配置（对应 C 端的 struct ifs_ip_config）
+type IfsIPConfig struct {
+	IPList [32]uint32
+	IPCount uint32
+	Reserved [12]uint8
+}
+
+// ConfigureInterfaceIPs 配置接口 IP 列表
+func ConfigureInterfaceIPs(ifsConfigMap *ebpf.Map, ifsIndex uint32, ips []uint32) error {
+	if ifsConfigMap == nil {
+		return fmt.Errorf("ifsConfigMap is nil")
+	}
+
+	if len(ips) > 32 {
+		return fmt.Errorf("too many IPs (max 32, got %d)", len(ips))
+	}
+
+	cfg := IfsIPConfig{
+		IPCount: uint32(len(ips)),
+	}
+
+	copy(cfg.IPList[:], ips)
+
+	key := ifsIndex
+	if err := ifsConfigMap.Put(&key, cfg.ToBytes()); err != nil {
+		return fmt.Errorf("failed to update interface config: %w", err)
+	}
+
+	log.Printf("Configured interface %d with %d IPs", ifsIndex, len(ips))
+	return nil
+}
+
+// ToBytes 将 IfsIPConfig 转换为字节切片（用于 eBPF Map）
+func (c *IfsIPConfig) ToBytes() []byte {
+	value := make([]byte, 140) // sizeof(ifs_ip_config) = 140
+
+	offset := 0
+	for i := 0; i < 32; i++ {
+		binary.BigEndian.PutUint32(value[offset+i*4:offset+i*4+4], c.IPList[i])
+	}
+	offset += 128
+
+	binary.BigEndian.PutUint32(value[offset:offset+4], c.IPCount)
+	offset += 16 // IPCount + reserved
+
+	return value
+}

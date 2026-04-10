@@ -146,4 +146,70 @@ struct debug_event {
     __u64 timestamp;
 } __attribute__((packed));
 
+// ========== ICMP VPN 相关定义 ==========
+
+// ICMP 连接标识（SNAT Map Key）
+struct icmp_conn_key {
+    __u32 inner_src_ip;  // 内层源 IP
+    __u32 inner_dst_ip;  // 内层目标 IP
+    __u16 icmp_id;       // ICMP Identifier
+    __u16 reserved;
+} __attribute__((packed));
+
+// ICMP DNAT 标识（DNAT Map Key）
+struct icmp_dnat_key {
+    __u32 wan_ip;        // SNAT 后的公网 IP
+    __u32 inner_dst_ip;  // 内层目标 IP
+    __u16 icmp_id;       // ICMP Identifier
+    __u16 reserved;
+} __attribute__((packed));
+
+// ICMP SNAT 条目（内 → 外）
+struct icmp_snat_entry {
+    __u32 wan_ip;        // SNAT 后的公网 IP
+    __u32 ifs_index;     // 出口接口索引
+
+    // 转发所需的以太网头信息（避免出站时重复 FIB 查询）
+    __u8 src_mac[6];     // 出口接口的源 MAC
+    __u8 dst_mac[6];     // 下一跳的目标 MAC
+
+    __u64 timestamp;     // 创建时间
+    __u8 reserved[8];
+} __attribute__((packed));
+
+// ICMP DNAT 条目（外 → 内）
+struct icmp_dnat_entry {
+    // 内层信息
+    __u32 inner_src_ip;  // 原始内层源 IP
+
+    // VPN 头信息（用于重构 VPN 封装）
+    __u32 vpn_session_id;     // VPN 会话 ID
+    __u8 vpn_next_proto;      // VPN 下层协议 (IPPROTO_ICMP = 1)
+    __u16 vpn_flags;          // VPN 标志位
+    __u8 reserved1;
+
+    // 外层 IP 信息
+    __u32 outer_src_ip;       // 原始外层源 IP（客户端公网 IP）
+    __u32 outer_dst_ip;       // 原始外层目标 IP（VPN 服务器 IP）
+    __u16 outer_src_port;     // 原始外层源端口
+    __u16 outer_dst_port;     // 原始外层目标端口（VPN 端口 18080）
+
+    // 外层以太网头信息（避免出站时重复查询）
+    __u8 outer_src_mac[6];    // 原始外层源 MAC（客户端 MAC）
+    __u8 outer_dst_mac[6];    // 原始外层目标 MAC（VPN 服务器 MAC）
+
+    // 入口接口信息（出站时从同一接口发送）
+    __u32 ingress_ifindex;    // 原始入包接口索引（用于回包）
+
+    __u64 timestamp;          // 创建时间
+    __u8 reserved2[4];
+} __attribute__((packed));
+
+// 接口 IP 配置
+struct ifs_ip_config {
+    __u32 ip_list[32];   // 该接口的 IP 列表（最多 32 个）
+    __u32 ip_count;      // IP 数量
+    __u8 reserved[12];
+} __attribute__((packed));
+
 #endif // UNIFIED_CONFIG_H
