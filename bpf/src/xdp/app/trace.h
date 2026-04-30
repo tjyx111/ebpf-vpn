@@ -70,12 +70,14 @@ static __always_inline int match_filter_rule(struct iphdr *ip, struct udphdr *ud
         return 0;
 
     // 检查端口（仅UDP/TCP）
+    // 注意：rule 中的端口字段已经是网络字节序（大端序），Go 加载器已转换
+    // hdr->source 和 hdr->dest 也是网络字节序，无需再次转换
     if (ip->protocol == IPPROTO_UDP || ip->protocol == IPPROTO_TCP) {
         struct udphdr *hdr = (void *)(ip + 1);
         if ((void *)(hdr + 1) > data_end) return 0;
-        if (rule->src_port && hdr->source != bpf_htons(rule->src_port))
+        if (rule->src_port && hdr->source != rule->src_port)
             return 0;
-        if (rule->dst_port && hdr->dest != bpf_htons(rule->dst_port))
+        if (rule->dst_port && hdr->dest != rule->dst_port)
             return 0;
     }
 

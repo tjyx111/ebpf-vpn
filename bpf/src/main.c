@@ -54,6 +54,55 @@ struct {
     __uint(max_entries, 256 * 1024);  // 256KB
 } debug_events SEC(".maps");
 
+// 全局变量：配置是否已打印（需要 Linux 5.2+）
+volatile int config_printed = 0;
+
+// Helper 函数：打印详细配置信息（仅在首次启用 LOG_CFG 时打印）
+static __always_inline void print_config(struct unified_config *cfg) {
+    if (!(cfg->log_flags & LOG_CFG)) {
+        return;
+    }
+
+    bpf_trace_printk("========== XDP Configuration ==========\n", 42);
+
+    // 功能标志位
+    bpf_trace_printk("Flags: 0x%x\n", 13, cfg->flags);
+    bpf_trace_printk("LogFlags: 0x%x\n", 15, cfg->log_flags);
+
+    // UDP Echo 配置
+    bpf_trace_printk("UDP_Echo_Port: %d\n", 20, bpf_ntohs(cfg->udp_echo_port));
+    bpf_trace_printk("MTU: %u\n", 9, cfg->mtu);
+    bpf_trace_printk("Mirror_Sample_Rate: %u\n", 25, cfg->mirror_sample_rate);
+
+    // NAT/VPN 配置
+    bpf_trace_printk("Timeout: %llu ns\n", 18, cfg->timeout_ns);
+    bpf_trace_printk("VPN_Server_IP: 0x%x\n", 21, bpf_ntohl(cfg->vpn_server_ip));
+    bpf_trace_printk("VPN_Port: %d\n", 15, bpf_ntohs(cfg->vpn_port));
+    bpf_trace_printk("Port_Range: %d-%d\n", 20, bpf_ntohs(cfg->port_start), bpf_ntohs(cfg->port_end));
+    bpf_trace_printk("Reserved_Ports_Count: %d\n", 26, cfg->reserved_count);
+
+    // 网卡配置
+    bpf_trace_printk("Ingress_Iface: %d\n", 20, cfg->ingress_iface);
+    bpf_trace_printk("Egress_Iface: %d\n", 19, cfg->egress_iface);
+    bpf_trace_printk("Egress_IP_Count: %d\n", 21, cfg->egress_ip_count);
+
+    // 打印出口 IP 列表（前4个，避免过多日志）
+    if (cfg->egress_ip_count > 0) {
+        bpf_trace_printk("Egress_IP[0]: 0x%x\n", 21, bpf_ntohl(cfg->egress_ips[0]));
+    }
+    if (cfg->egress_ip_count > 1) {
+        bpf_trace_printk("Egress_IP[1]: 0x%x\n", 21, bpf_ntohl(cfg->egress_ips[1]));
+    }
+    if (cfg->egress_ip_count > 2) {
+        bpf_trace_printk("Egress_IP[2]: 0x%x\n", 21, bpf_ntohl(cfg->egress_ips[2]));
+    }
+    if (cfg->egress_ip_count > 3) {
+        bpf_trace_printk("Egress_IP[3]: 0x%x\n", 21, bpf_ntohl(cfg->egress_ips[3]));
+    }
+
+    bpf_trace_printk("========== End Configuration ==========\n", 43);
+}
+
 // Helper 函数：匹配单条抓包规则
 static __always_inline int match_single_rule(struct capture_rule *rule,
                                               __u32 src_ip,
@@ -304,34 +353,35 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
                          bpf_ntohs(inner_dst_port), inner_ip->protocol);
     }
 
-    // 6. 检查端口范围
-    __u16 outer_src_port = bpf_ntohs(inner_src_port);
-    if (outer_src_port < cfg->port_start || outer_src_port > cfg->port_end) {
+    // 6. 检查端口范围（直接使用网络字节序比较）
+    if (inner_src_port < cfg->port_start || inner_src_port > cfg->port_end) {
         if (cfg->log_flags & LOG_SNAT) {
             bpf_trace_printk("Port %d not in range [%d,%d]\n",
                              sizeof("Port %d not in range [%d,%d]\n"),
-                             outer_src_port, cfg->port_start, cfg->port_end);
+                             bpf_ntohs(inner_src_port),
+                             bpf_ntohs(cfg->port_start),
+                             bpf_ntohs(cfg->port_end));
         }
         return XDP_PASS;
     }
 
-    // 检查预留端口（展开循环，最多8个）
-    if (cfg->reserved_count > 0 && cfg->reserved_ports[0] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 1 && cfg->reserved_ports[1] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 2 && cfg->reserved_ports[2] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 3 && cfg->reserved_ports[3] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 4 && cfg->reserved_ports[4] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 5 && cfg->reserved_ports[5] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 6 && cfg->reserved_ports[6] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
-    if (cfg->reserved_count > 7 && cfg->reserved_ports[7] == outer_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), outer_src_port); } return XDP_PASS; }
+    // 检查预留端口（展开循环，最多8个，网络字节序直接比较）
+    if (cfg->reserved_count > 0 && cfg->reserved_ports[0] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 1 && cfg->reserved_ports[1] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 2 && cfg->reserved_ports[2] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 3 && cfg->reserved_ports[3] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 4 && cfg->reserved_ports[4] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 5 && cfg->reserved_ports[5] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 6 && cfg->reserved_ports[6] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+    if (cfg->reserved_count > 7 && cfg->reserved_ports[7] == inner_src_port)
+        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
 
     // 7. 选择公网 IP（通过 hash，直接比较选择）
     __u32 ip_count = cfg->egress_ip_count;
@@ -555,6 +605,12 @@ int xdp_gateway(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    // 打印配置信息（仅首次，当 LOG_CFG 开启时）
+    if (cfg->log_flags & LOG_CFG && !config_printed) {
+        config_printed = 1;
+        print_config(cfg);
+    }
+
     // 复制到栈变量（避免验证器边界检查）
     __u8 flags = cfg->flags;
 
@@ -578,7 +634,7 @@ int xdp_gateway(struct xdp_md *ctx) {
         }
 
         if (flags & CFG_FLAG_UDP_ECHO_ENABLED) {
-            if (udp->dest == bpf_htons(cfg->udp_echo_port)) {
+            if (udp->dest == cfg->udp_echo_port) {
                 int ret = xdp_udpecho(eth, ip, udp, data_end, cfg);
                 // UDP Echo 处理完成后强制抓包（不检查规则）
                 try_capture_packet(ctx, data, data_end, ip, ret, cfg, 1);
@@ -594,7 +650,7 @@ int xdp_gateway(struct xdp_md *ctx) {
             struct udphdr *udp = (void *)(ip + 1);
             if ((void *)(udp + 1) > data_end) return XDP_PASS;
 
-            if (udp->dest == bpf_htons(cfg->vpn_port)) {
+            if (udp->dest == cfg->vpn_port) {
                 // 检查 VPN magic，如果是 VPN 报文则处理 SNAT
                 struct vpn_header *vpn = (void *)(udp + 1);
                 if ((void *)(vpn + 1) > data_end) return XDP_PASS;

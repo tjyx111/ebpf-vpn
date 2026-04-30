@@ -39,17 +39,15 @@ type CaptureRule struct {
 // TOMLConfig TOML 配置文件结构
 type TOMLConfig struct {
 	Network struct {
-		UDPEchoPort uint32 `toml:"udp_echo_port"`
+		UDPEchoPort uint16 `toml:"udp_echo_port"`
 		MTU         uint32 `toml:"mtu"`
 	} `toml:"network"`
 	Features struct {
-		TraceEnabled      bool `toml:"trace_enabled"`
-		AfXdpRedirect     bool `toml:"afxdp_redirect"`
-		UDPEchoEnabled    bool `toml:"udp_echo_enabled"`
-		ForwardingEnabled bool `toml:"forwarding_enabled"`
-		NATEnabled        bool `toml:"nat_enabled"`
-		MirrorEnabled     bool `toml:"mirror_enabled"`
-		DebugEnabled      bool `toml:"debug_enabled"`
+		TraceEnabled   bool `toml:"trace_enabled"`
+		AfXdpRedirect  bool `toml:"afxdp_redirect"`
+		UDPEchoEnabled bool `toml:"udp_echo_enabled"`
+		NATEnabled     bool `toml:"nat_enabled"`
+		DebugEnabled   bool `toml:"debug_enabled"`
 	} `toml:"features"`
 	Tracing struct {
 		MirrorSampleRate uint8 `toml:"mirror_sample_rate"`
@@ -131,7 +129,7 @@ func LoadFromFile(path string) (*Config, error) {
 // convertToUnifiedConfig 将 TOML 配置转换为 UnifiedConfig
 func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	cfg := &UnifiedConfig{
-		UDPEchoPort:      uint16(tomlCfg.Network.UDPEchoPort),
+		UDPEchoPort:      tomlCfg.Network.UDPEchoPort,
 		MTU:              tomlCfg.Network.MTU,
 		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
 		LogFlags:         tomlCfg.Tracing.LogFlags,
@@ -152,14 +150,8 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	if tomlCfg.Features.UDPEchoEnabled {
 		cfg.Flags |= 1 << 2 // CFG_FLAG_UDP_ECHO_ENABLED
 	}
-	if tomlCfg.Features.ForwardingEnabled {
-		cfg.Flags |= 1 << 3 // CFG_FLAG_FORWARDING_ENABLED
-	}
 	if tomlCfg.Features.NATEnabled {
 		cfg.Flags |= 1 << 4 // CFG_FLAG_NAT_ENABLED
-	}
-	if tomlCfg.Features.MirrorEnabled {
-		cfg.Flags |= 1 << 5 // CFG_FLAG_MIRROR_ENABLED
 	}
 	if tomlCfg.Features.DebugEnabled {
 		cfg.Flags |= 1 << 6 // CFG_FLAG_DEBUG_ENABLED
@@ -314,7 +306,7 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	binary.LittleEndian.PutUint32(value[offset:offset+4], c.LogFlags)
 	offset += 4 // log_flags
 
-	binary.LittleEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
 	offset += 4 // udp_echo_port + reserved2
 
 	binary.LittleEndian.PutUint32(value[offset:offset+4], c.MTU)
@@ -329,16 +321,16 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	binary.BigEndian.PutUint32(value[offset:offset+4], c.VPNServerIP)
 	offset += 4
 
-	binary.LittleEndian.PutUint16(value[offset:offset+2], c.VPNPort)
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.VPNPort)
 	offset += 2
-	binary.LittleEndian.PutUint16(value[offset:offset+2], c.PortStart)
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortStart)
 	offset += 2
-	binary.LittleEndian.PutUint16(value[offset:offset+2], c.PortEnd)
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.PortEnd)
 	offset += 2
 
 	// 预留端口
 	for i := 0; i < 8; i++ {
-		binary.LittleEndian.PutUint16(value[offset+i*2:offset+i*2+2], c.ReservedPorts[i])
+		binary.BigEndian.PutUint16(value[offset+i*2:offset+i*2+2], c.ReservedPorts[i])
 	}
 	offset += 16
 

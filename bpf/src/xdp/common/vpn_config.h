@@ -17,7 +17,6 @@ struct vpn_config {
 #define CFG_FLAG_CAPTURE_ENABLED       (1 << 0)  // 抓包功能启用
 #define CFG_FLAG_AFXDP_REDIRECT        (1 << 1)
 #define CFG_FLAG_UDP_ECHO_ENABLED      (1 << 2)
-#define CFG_FLAG_FORWARDING_ENABLED    (1 << 3)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
 
 // 日志标志位定义

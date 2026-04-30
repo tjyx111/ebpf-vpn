@@ -7,9 +7,7 @@
 #define CFG_FLAG_TRACE_ENABLED          (1 << 0)
 #define CFG_FLAG_AFXDP_REDIRECT        (1 << 1)
 #define CFG_FLAG_UDP_ECHO_ENABLED      (1 << 2)
-#define CFG_FLAG_FORWARDING_ENABLED    (1 << 3)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
-#define CFG_FLAG_MIRROR_ENABLED        (1 << 5)
 #define CFG_FLAG_DEBUG_ENABLED          (1 << 6)
 
 // 日志标志位定义（用于控制 bpf_trace_printk 输出）
@@ -17,6 +15,7 @@
 #define LOG_UDPECHO                     (1 << 1)  // UDP Echo 相关日志
 #define LOG_SNAT                        (1 << 2)  // SNAT 处理日志
 #define LOG_DNAT                        (1 << 3)  // DNAT 处理日志
+#define LOG_CFG                         (1 << 4)  // 配置相关日志
 #define LOG_ALL                         0xFF      // 所有日志
 
 // VPN 头部（简化版）
