@@ -6,12 +6,17 @@ mtu = 1500
 trace_enabled = true
 afxdp_redirect = false
 udp_echo_enabled = true
-nat_enabled = false
-debug_enabled = false
+nat_enabled = true
+debug_enabled = true
 
 [tracing]
 mirror_sample_rate = 100
-log_flags = 16  # 日志标志位（0=关闭，1=DEBUG_PKG, 2=UDPECHO, 4=SNAT, 8=DNAT, 16=CFG, 255=ALL）
+log_flags = 3  # 日志标志位（0=关闭，1=DEBUG_PKG, 2=UDPECHO, 4=SNAT, 8=DNAT, 16=CFG, 255=ALL）
+
+# 抓包配置
+[capture]
+enabled = true           # 是否开启抓包功能
+dump_pkg_flags = 1      # 抓包标志位（1=在 XDP 入口抓原始包）
 
 # 抓包规则配置
 # 支持多条规则，只要匹配任一规则就会抓包
@@ -27,9 +32,14 @@ name = "udp echo output"
 dst_port = 28080
 protocol = "udp"
 
-[[capture_rules]]                                                                                                                                                                                                          
-name = "all icmp"                                                                                                                                                                                                          
-protocol = "icmp"   
+[[capture_rules]]
+name = "all icmp"
+protocol = "icmp"
+
+[[capture_rules]]
+name = "vpn traffic port 18080"
+dst_port = 18080
+protocol = "udp"   
 
 # NAT 配置
 [nat]
@@ -41,8 +51,8 @@ reserved_ports = [18080, 28080, 22, 80, 443, 3389]  # 预留端口
 timeout = 60                    # 超时时间（秒）
 
 # 网卡映射配置
-ingress_iface = 0      # 入口网卡 eth0
-egress_iface = 2       # 出口网卡 eth2
+ingress_iface = 1      # 入口网卡 lo (ifindex 1)
+egress_iface = 1       # 出口网卡 lo
 
 # 出口网卡的公网 IP 列表
 egress_ips = [

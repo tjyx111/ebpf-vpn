@@ -7,17 +7,19 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cilium/ebpf"
-	"github.com/fsnotify/fsnotify"
 	"ebpf-vpn/internal/config"
 	"ebpf-vpn/internal/logging"
 	"ebpf-vpn/internal/packet"
 	"ebpf-vpn/internal/xdp"
+
+	"github.com/cilium/ebpf"
+	"github.com/fsnotify/fsnotify"
 )
 
 var (
 	ifaceName  = flag.String("iface", "eth0", "Network interface to attach XDP program")
 	configPath = flag.String("config", "config.toml", "Path to configuration file")
+	pcapFile   = flag.String("pcap", "", "Path to PCAP file for packet capture (empty to disable)")
 )
 
 func main() {
@@ -33,8 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d, LogFlags=0x%02x",
-		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
+	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
+		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate,
+		cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 
 	// 加载 XDP 程序
 	program, err := xdp.Load(*ifaceName)
@@ -59,13 +62,22 @@ func main() {
 	logger := logging.NewLogger(cfg.UnifiedConfig.LogFlags)
 
 	// 启动 Ring Buffer 消费者
-	consumer, err := packet.NewConsumer(program.EventsRingbuf(), logger)
+	// 只有当配置文件中启用抓包且指定了 pcap 文件时才写入 pcap 文件
+	pcapFilePath := ""
+	if cfg.UnifiedConfig.CaptureEnabled == 1 && *pcapFile != "" {
+		pcapFilePath = *pcapFile
+	}
+	consumer, err := packet.NewConsumer(program.EventsRingbuf(), logger, pcapFilePath)
 	if err != nil {
 		log.Fatalf("Failed to create packet consumer: %v", err)
 	}
 	consumer.Start()
 	defer consumer.Stop()
-	log.Println("Packet consumer started")
+	if pcapFilePath != "" {
+		log.Printf("Packet consumer started (PCAP: %s)", pcapFilePath)
+	} else {
+		log.Println("Packet consumer started (PCAP disabled)")
+	}
 
 	// 启动 Debug Ring Buffer 消费者
 	debugConsumer, err := packet.NewDebugConsumer(program.DebugEvents(), logger)
@@ -138,8 +150,9 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 					continue
 				}
 
-				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture rules=%d, LogFlags=0x%02x",
-					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
+				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
+					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate,
+					cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 			}
 
 		case err, ok := <-watcher.Errors:

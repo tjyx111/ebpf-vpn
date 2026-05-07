@@ -10,6 +10,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 	"ebpf-vpn/internal/logging"
+	"ebpf-vpn/internal/pcap"
 )
 
 // DebugEvent 对应 C 端的 debug_event 结构（packed，80字节）
@@ -57,23 +58,37 @@ type TraceEvent struct {
 
 // Consumer Ring Buffer 消费器
 type Consumer struct {
-	reader *ringbuf.Reader
-	done   chan struct{}
-	logger *logging.Logger
+	reader     *ringbuf.Reader
+	done       chan struct{}
+	logger     *logging.Logger
+	pcapWriter *pcap.Writer
 }
 
 // NewConsumer 创建新的消费者
-func NewConsumer(ringbufMap *ebpf.Map, logger *logging.Logger) (*Consumer, error) {
+func NewConsumer(ringbufMap *ebpf.Map, logger *logging.Logger, pcapFile string) (*Consumer, error) {
 	rd, err := ringbuf.NewReader(ringbufMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ringbuf reader: %w", err)
 	}
 
-	return &Consumer{
+	c := &Consumer{
 		reader: rd,
 		done:   make(chan struct{}),
 		logger: logger,
-	}, nil
+	}
+
+	// 如果指定了 pcap 文件，创建 pcap 写入器
+	if pcapFile != "" {
+		writer, err := pcap.NewWriter(pcapFile)
+		if err != nil {
+			rd.Close()
+			return nil, fmt.Errorf("failed to create pcap writer: %w", err)
+		}
+		c.pcapWriter = writer
+		log.Printf("PCAP writing enabled: %s", pcapFile)
+	}
+
+	return c, nil
 }
 
 // Start 启动消费 goroutine
@@ -84,6 +99,13 @@ func (c *Consumer) Start() {
 // Stop 停止消费
 func (c *Consumer) Stop() {
 	close(c.done)
+	if c.pcapWriter != nil {
+		if err := c.pcapWriter.Close(); err != nil {
+			log.Printf("Error closing pcap writer: %v", err)
+		} else {
+			log.Printf("PCAP file closed successfully")
+		}
+	}
 }
 
 // consume 消费 Ring Buffer 事件
@@ -124,6 +146,11 @@ func (c *Consumer) logPacket(event *TraceEvent) {
 		return
 	}
 	packet := event.PacketData[:event.PktLen]
+
+	// 写入 pcap 文件（如果启用）
+	if c.pcapWriter != nil && len(packet) > 0 {
+		c.pcapWriter.Write(packet)
+	}
 
 	if len(packet) < 14 {
 		return

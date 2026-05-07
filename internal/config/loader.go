@@ -53,6 +53,10 @@ type TOMLConfig struct {
 		MirrorSampleRate uint8 `toml:"mirror_sample_rate"`
 		LogFlags         uint32 `toml:"log_flags"`
 	} `toml:"tracing"`
+	Capture struct {
+		Enabled      bool   `toml:"enabled"`
+		DumpPkgFlags uint8  `toml:"dump_pkg_flags"`
+	} `toml:"capture"`
 	CaptureRules []CaptureRuleTOML `toml:"capture_rules"`
 	NAT         struct {
 		VPNServerIP   string   `toml:"vpn_server_ip"`
@@ -89,7 +93,9 @@ type UnifiedConfig struct {
 	EgressIPCount    uint8
 	Reserved4        uint8
 	EgressIPs        [16]uint32
-	Reserved5        [8]uint8
+	CaptureEnabled   uint8  // 是否开启抓包功能
+	DumpPkgFlags     uint8  // 抓包标志位
+	Reserved5        [10]uint8
 }
 
 // Config 包含统一配置和抓包规则
@@ -133,11 +139,13 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 		MTU:              tomlCfg.Network.MTU,
 		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
 		LogFlags:         tomlCfg.Tracing.LogFlags,
+		CaptureEnabled:   boolToUint8(tomlCfg.Capture.Enabled),
+		DumpPkgFlags:     tomlCfg.Capture.DumpPkgFlags,
 		Reserved1:        [3]uint8{0, 0, 0},
 		Reserved2:        0,
 		Reserved3:        [3]uint8{0, 0, 0},
 		Reserved4:        0,
-		Reserved5:        [8]uint8{0, 0, 0, 0, 0, 0, 0, 0},
+		Reserved5:        [10]uint8{},
 	}
 
 	// 设置标志位
@@ -195,6 +203,14 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	}
 
 	return cfg
+}
+
+// boolToUint8 将 bool 转换为 uint8 (true=1, false=0)
+func boolToUint8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // parseCaptureRule 将 TOML 抓包规则转换为 CaptureRule 结构
@@ -296,7 +312,7 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	key := uint32(0) // CFG_KEY
 
 	// 将 UnifiedConfig 转换为字节
-	// sizeof(unified_config) = 1+3+4+2+2+4+1+3+8+4+2+2+2+16+2+1+1+1+1+64+8 = 136 字节
+	// sizeof(unified_config) = 136 字节 (C 结构体使用 __attribute__((packed)))
 	value := make([]byte, 136)
 
 	offset := 0
@@ -349,6 +365,12 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 		binary.BigEndian.PutUint32(value[offset+i*4:offset+i*4+4], c.EgressIPs[i])
 	}
 	offset += 64
+
+	// 抓包配置
+	value[offset] = c.CaptureEnabled
+	offset++
+	value[offset] = c.DumpPkgFlags
+	offset++
 
 	// reserved5 已经是零值，无需写入
 

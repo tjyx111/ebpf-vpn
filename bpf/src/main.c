@@ -69,6 +69,10 @@ static __always_inline void print_config(struct unified_config *cfg) {
     bpf_trace_printk("Flags: 0x%x\n", 13, cfg->flags);
     bpf_trace_printk("LogFlags: 0x%x\n", 15, cfg->log_flags);
 
+    // 抓包配置
+    bpf_trace_printk("Capture_Enabled: %d\n", 21, cfg->capture_enabled);
+    bpf_trace_printk("Dump_Pkg_Flags: 0x%x\n", 22, cfg->dump_pkg_flags);
+
     // UDP Echo 配置
     bpf_trace_printk("UDP_Echo_Port: %d\n", 20, bpf_ntohs(cfg->udp_echo_port));
     bpf_trace_printk("MTU: %u\n", 9, cfg->mtu);
@@ -179,8 +183,13 @@ static __always_inline void try_capture_packet(struct xdp_md *ctx,
                                                __u32 xdp_action,
                                                struct unified_config *cfg,
                                                int force) {
-    // 检查是否启用了抓包功能
-    if (!(cfg->flags & CFG_FLAG_TRACE_ENABLED)) {
+    // 检查是否启用了抓包功能（使用独立的 capture_enabled 配置）
+    if (!cfg->capture_enabled) {
+        return;
+    }
+
+    // 检查抓包标志位（是否在 XDP 入口抓包）
+    if (!(cfg->dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
         return;
     }
 
@@ -214,7 +223,7 @@ static __always_inline void try_capture_packet(struct xdp_md *ctx,
         return;
     }
 
-    // 发送抓包事件
+    // 发送抓包事件（原始包数据）
     send_trace_event(ctx, data, data_end, xdp_action, 0);
 }
 
@@ -634,6 +643,7 @@ int xdp_gateway(struct xdp_md *ctx) {
         }
 
         if (flags & CFG_FLAG_UDP_ECHO_ENABLED) {
+            // 强制抓包用于调试
             if (udp->dest == cfg->udp_echo_port) {
                 int ret = xdp_udpecho(eth, ip, udp, data_end, cfg);
                 // UDP Echo 处理完成后强制抓包（不检查规则）

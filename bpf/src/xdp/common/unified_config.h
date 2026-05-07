@@ -77,6 +77,9 @@ struct dnat_entry {
     __u8  reserved4[8];
 } __attribute__((packed));
 
+// 抓包标志位定义
+#define DUMP_PKG_XDP_ENTRY        (1 << 0)  // 在 XDP 入口抓原始包
+
 // 统一配置结构
 struct unified_config {
     // 功能标志位
@@ -107,7 +110,10 @@ struct unified_config {
     __u8 reserved4;
     __u32 egress_ips[16];  // 出口网卡的公网 IP 列表（最多16个）
 
-    __u8 reserved5[12];
+    // 抓包配置
+    __u8 capture_enabled;   // 是否开启抓包功能（0/1）
+    __u8 dump_pkg_flags;    // 抓包标志位（1=在 XDP 入口抓原始包）
+    __u8 reserved5[10];
 } __attribute__((packed));
 
 // Debug 事件结构体（通过 Ring Buffer 发送到用户空间）
