@@ -4,19 +4,33 @@
 #include <linux/types.h>
 
 // 配置标志位定义
-#define CFG_FLAG_TRACE_ENABLED          (1 << 0)
 #define CFG_FLAG_AFXDP_REDIRECT        (1 << 1)
 #define CFG_FLAG_UDP_ECHO_ENABLED      (1 << 2)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
 #define CFG_FLAG_DEBUG_ENABLED          (1 << 6)
 
 // 日志标志位定义（用于控制 bpf_trace_printk 输出）
-#define LOG_DEBUG_PKG                   (1 << 0)  // 调试数据包处理
-#define LOG_UDPECHO                     (1 << 1)  // UDP Echo 相关日志
-#define LOG_SNAT                        (1 << 2)  // SNAT 处理日志
-#define LOG_DNAT                        (1 << 3)  // DNAT 处理日志
-#define LOG_CFG                         (1 << 4)  // 配置相关日志
-#define LOG_ALL                         0xFF      // 所有日志
+// 使用 32 位标志位，每一位代表一种日志类型
+#define LOG_FLG_DEBUG_PKT                (1 << 0)  // 调试数据包处理
+#define LOG_FLG_UDPECHO                  (1 << 1)  // UDP Echo 相关日志
+#define LOG_FLG_SNAT                     (1 << 2)  // SNAT 处理日志
+#define LOG_FLG_DNAT                     (1 << 3)  // DNAT 处理日志
+#define LOG_FLG_CFG                      (1 << 4)  // 配置相关日志
+#define LOG_FLG_VPN_ENC                  (1 << 5)  // VPN 封装日志
+#define LOG_FLG_VPN_DEC                  (1 << 6)  // VPN 解封装日志
+#define LOG_FLG_ICMP                     (1 << 7)  // ICMP 处理日志
+#define LOG_FLG_CAPTURE                  (1 << 8)  // 抓包相关日志
+#define LOG_FLG_ERROR                    (1 << 9)  // 错误日志
+#define LOG_FLG_WARN                     (1 << 10) // 警告日志
+#define LOG_FLG_INFO                     (1 << 11) // 信息日志
+#define LOG_FLG_ALL                      0xFFFFFFFF  // 所有日志
+
+// 兼容旧的宏定义（逐步迁移）
+#define LOG_DEBUG_PKG                    LOG_FLG_DEBUG_PKT
+#define LOG_UDPECHO                      LOG_FLG_UDPECHO
+#define LOG_SNAT                         LOG_FLG_SNAT
+#define LOG_DNAT                         LOG_FLG_DNAT
+#define LOG_CFG                          LOG_FLG_CFG
 
 // VPN 头部（简化版）
 struct vpn_header {

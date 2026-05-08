@@ -107,6 +107,11 @@ func (w *Writer) Write(packetData []byte) {
 
 // writeLoop 写入循环（在单独的 goroutine 中运行）
 func (w *Writer) writeLoop() {
+	syncTicker := time.NewTicker(1 * time.Second)  // 每秒刷新一次
+	defer syncTicker.Stop()
+
+	packetCount := 0
+
 	for {
 		select {
 		case <-w.done:
@@ -117,10 +122,21 @@ func (w *Writer) writeLoop() {
 					fmt.Printf("Error writing packet: %v\n", err)
 				}
 			}
+			// 最后刷新一次
+			w.file.Sync()
 			return
+		case <-syncTicker.C:
+			// 定期刷新到磁盘，使 tcpdump 能实时读取
+			if packetCount > 0 {
+				if err := w.file.Sync(); err != nil {
+					fmt.Printf("Error syncing pcap file: %v\n", err)
+				}
+			}
 		case packetData := <-w.packetChan:
 			if err := writePacketHeader(w.file, packetData); err != nil {
 				fmt.Printf("Error writing packet: %v\n", err)
+			} else {
+				packetCount++
 			}
 		}
 	}

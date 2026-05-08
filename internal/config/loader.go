@@ -43,15 +43,24 @@ type TOMLConfig struct {
 		MTU         uint32 `toml:"mtu"`
 	} `toml:"network"`
 	Features struct {
-		TraceEnabled   bool `toml:"trace_enabled"`
-		AfXdpRedirect  bool `toml:"afxdp_redirect"`
-		UDPEchoEnabled bool `toml:"udp_echo_enabled"`
-		NATEnabled     bool `toml:"nat_enabled"`
-		DebugEnabled   bool `toml:"debug_enabled"`
+		AfXdpRedirect      bool `toml:"afxdp_redirect"`
+		UDPEchoEnabled     bool `toml:"udp_echo_enabled"`
+		NATEnabled         bool `toml:"nat_enabled"`
+		DebugPacketEnabled bool `toml:"debug_packet_enabled"` // 是否启用 debug_packet 功能
 	} `toml:"features"`
 	Tracing struct {
-		MirrorSampleRate uint8 `toml:"mirror_sample_rate"`
-		LogFlags         uint32 `toml:"log_flags"`
+		LogFlgDebugPkt bool `toml:"log_flg_debug_pkt"` // 调试数据包处理
+		LogFlgUdpEcho  bool `toml:"log_flg_udpecho"`   // UDP Echo 相关日志
+		LogFlgSnat     bool `toml:"log_flg_snat"`      // SNAT 处理日志
+		LogFlgDnat     bool `toml:"log_flg_dnat"`      // DNAT 处理日志
+		LogFlgCfg      bool `toml:"log_flg_cfg"`       // 配置相关日志
+		LogFlgVpnEnc   bool `toml:"log_flg_vpn_enc"`   // VPN 封装日志
+		LogFlgVpnDec   bool `toml:"log_flg_vpn_dec"`   // VPN 解封装日志
+		LogFlgIcmp     bool `toml:"log_flg_icmp"`      // ICMP 处理日志
+		LogFlgCapture  bool `toml:"log_flg_capture"`   // 抓包相关日志
+		LogFlgError    bool `toml:"log_flg_error"`     // 错误日志
+		LogFlgWarn     bool `toml:"log_flg_warn"`      // 警告日志
+		LogFlgInfo     bool `toml:"log_flg_info"`      // 信息日志
 	} `toml:"tracing"`
 	Capture struct {
 		Enabled      bool   `toml:"enabled"`
@@ -134,11 +143,51 @@ func LoadFromFile(path string) (*Config, error) {
 
 // convertToUnifiedConfig 将 TOML 配置转换为 UnifiedConfig
 func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
+	// 从独立的布尔配置构建 log_flags 位掩码
+	// 使用与 C 端统一的命名规则：LOG_FLG_XXX
+	logFlags := uint32(0)
+	if tomlCfg.Tracing.LogFlgDebugPkt {
+		logFlags |= 1 << 0 // LOG_FLG_DEBUG_PKT
+	}
+	if tomlCfg.Tracing.LogFlgUdpEcho {
+		logFlags |= 1 << 1 // LOG_FLG_UDPECHO
+	}
+	if tomlCfg.Tracing.LogFlgSnat {
+		logFlags |= 1 << 2 // LOG_FLG_SNAT
+	}
+	if tomlCfg.Tracing.LogFlgDnat {
+		logFlags |= 1 << 3 // LOG_FLG_DNAT
+	}
+	if tomlCfg.Tracing.LogFlgCfg {
+		logFlags |= 1 << 4 // LOG_FLG_CFG
+	}
+	if tomlCfg.Tracing.LogFlgVpnEnc {
+		logFlags |= 1 << 5 // LOG_FLG_VPN_ENC
+	}
+	if tomlCfg.Tracing.LogFlgVpnDec {
+		logFlags |= 1 << 6 // LOG_FLG_VPN_DEC
+	}
+	if tomlCfg.Tracing.LogFlgIcmp {
+		logFlags |= 1 << 7 // LOG_FLG_ICMP
+	}
+	if tomlCfg.Tracing.LogFlgCapture {
+		logFlags |= 1 << 8 // LOG_FLG_CAPTURE
+	}
+	if tomlCfg.Tracing.LogFlgError {
+		logFlags |= 1 << 9 // LOG_FLG_ERROR
+	}
+	if tomlCfg.Tracing.LogFlgWarn {
+		logFlags |= 1 << 10 // LOG_FLG_WARN
+	}
+	if tomlCfg.Tracing.LogFlgInfo {
+		logFlags |= 1 << 11 // LOG_FLG_INFO
+	}
+
 	cfg := &UnifiedConfig{
 		UDPEchoPort:      tomlCfg.Network.UDPEchoPort,
 		MTU:              tomlCfg.Network.MTU,
-		MirrorSampleRate: tomlCfg.Tracing.MirrorSampleRate,
-		LogFlags:         tomlCfg.Tracing.LogFlags,
+		MirrorSampleRate: 0,           // 已弃用，固定为 0
+		LogFlags:         logFlags,     // 从布尔配置转换而来
 		CaptureEnabled:   boolToUint8(tomlCfg.Capture.Enabled),
 		DumpPkgFlags:     tomlCfg.Capture.DumpPkgFlags,
 		Reserved1:        [3]uint8{0, 0, 0},
@@ -149,9 +198,6 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	}
 
 	// 设置标志位
-	if tomlCfg.Features.TraceEnabled {
-		cfg.Flags |= 1 << 0 // CFG_FLAG_TRACE_ENABLED
-	}
 	if tomlCfg.Features.AfXdpRedirect {
 		cfg.Flags |= 1 << 1 // CFG_FLAG_AFXDP_REDIRECT
 	}
@@ -161,7 +207,7 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	if tomlCfg.Features.NATEnabled {
 		cfg.Flags |= 1 << 4 // CFG_FLAG_NAT_ENABLED
 	}
-	if tomlCfg.Features.DebugEnabled {
+	if tomlCfg.Features.DebugPacketEnabled {
 		cfg.Flags |= 1 << 6 // CFG_FLAG_DEBUG_ENABLED
 	}
 
@@ -323,13 +369,17 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	offset += 4 // log_flags
 
 	binary.BigEndian.PutUint16(value[offset:offset+2], c.UDPEchoPort)
-	offset += 4 // udp_echo_port + reserved2
+	offset += 2 // udp_echo_port
+	// reserved2 is already zero
+	offset += 2
 
 	binary.LittleEndian.PutUint32(value[offset:offset+4], c.MTU)
 	offset += 4
 
-	value[offset] = c.MirrorSampleRate
-	offset += 4 // mirror_sample_rate + reserved3
+	value[offset] = c.MirrorSampleRate // 已弃用，固定为 0
+	offset++ // mirror_sample_rate
+	// reserved3 is already zero
+	offset += 3
 
 	binary.LittleEndian.PutUint64(value[offset:offset+8], c.TimeoutNS)
 	offset += 8
@@ -350,7 +400,7 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	}
 	offset += 16
 
-	binary.LittleEndian.PutUint16(value[offset:offset+2], c.ReservedCount)
+	binary.BigEndian.PutUint16(value[offset:offset+2], c.ReservedCount)
 	offset += 2
 
 	value[offset] = c.IngressIface
@@ -358,7 +408,9 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	value[offset] = c.EgressIface
 	offset++
 	value[offset] = c.EgressIPCount
-	offset += 2 // egress_ip_count + reserved4
+	offset++ // egress_ip_count
+	// reserved4 is already zero
+	offset++
 
 	// 公网 IP 列表
 	for i := 0; i < 16; i++ {
@@ -373,6 +425,10 @@ func (c *UnifiedConfig) SyncToMap(configMap *ebpf.Map) error {
 	offset++
 
 	// reserved5 已经是零值，无需写入
+
+	if len(value) != 136 {
+		return fmt.Errorf("invalid value length: %d (expected 136)", len(value))
+	}
 
 	return configMap.Put(&key, value)
 }

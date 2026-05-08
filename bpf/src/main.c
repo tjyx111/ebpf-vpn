@@ -57,9 +57,9 @@ struct {
 // 全局变量：配置是否已打印（需要 Linux 5.2+）
 volatile int config_printed = 0;
 
-// Helper 函数：打印详细配置信息（仅在首次启用 LOG_CFG 时打印）
+// Helper 函数：打印详细配置信息（仅在首次启用 LOG_FLG_CFG 时打印）
 static __always_inline void print_config(struct unified_config *cfg) {
-    if (!(cfg->log_flags & LOG_CFG)) {
+    if (!(cfg->log_flags & LOG_FLG_CFG)) {
         return;
     }
 
@@ -245,14 +245,14 @@ static __always_inline void debug_packet(struct xdp_md *ctx,
                                          void *data_end,
                                          struct unified_config *cfg) {
 
-    if (cfg->log_flags & LOG_DEBUG_PKG) {
+    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
         bpf_trace_printk("[DEBUG CHECK] enter", sizeof("[DEBUG CHECK] enter"));
     }
 
     // 分配 Ring Buffer 空间
     struct debug_event *e = bpf_ringbuf_reserve(&debug_events, sizeof(*e), 0);
     if (!e) {
-        if (cfg->log_flags & LOG_DEBUG_PKG) {
+        if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
             bpf_trace_printk("[DEBUG CHECK] bpf_ringbuf_reserve failed", sizeof("[DEBUG CHECK] bpf_ringbuf_reserve failed"));
         }
         return;  // 分配失败，直接返回
@@ -305,7 +305,7 @@ static __always_inline void debug_packet(struct xdp_md *ctx,
 
     // 时间戳
     e->timestamp = bpf_ktime_get_ns();
-    if (cfg->log_flags & LOG_DEBUG_PKG) {
+    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
         bpf_trace_printk("[DEBUG CHECK] filled event, timestamp=%llu", sizeof("[DEBUG CHECK] filled event, timestamp=%llu"), e->timestamp);
     }
     bpf_ringbuf_submit(e, 0);
@@ -325,7 +325,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     if ((vpn->first_byte & VPN_MAGIC_MASK) != VPN_MAGIC_VALUE)
         return XDP_PASS;  // 不是 VPN 报文
 
-    if (cfg->log_flags & LOG_SNAT) {
+    if (cfg->log_flags & LOG_FLG_SNAT) {
         bpf_trace_printk("=== SNAT DETECTED ===\n", sizeof("=== SNAT DETECTED ===\n"));
     }
 
@@ -352,7 +352,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     }
 
     // 5. 打印内层五元组
-    if (cfg->log_flags & LOG_SNAT) {
+    if (cfg->log_flags & LOG_FLG_SNAT) {
         bpf_trace_printk("Inner: %x:%d -> %x:%d\n",
                          sizeof("Inner: %x:%d -> %x:%d\n"),
                          inner_ip->saddr, bpf_ntohs(inner_src_port),
@@ -364,7 +364,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
 
     // 6. 检查端口范围（直接使用网络字节序比较）
     if (inner_src_port < cfg->port_start || inner_src_port > cfg->port_end) {
-        if (cfg->log_flags & LOG_SNAT) {
+        if (cfg->log_flags & LOG_FLG_SNAT) {
             bpf_trace_printk("Port %d not in range [%d,%d]\n",
                              sizeof("Port %d not in range [%d,%d]\n"),
                              bpf_ntohs(inner_src_port),
@@ -376,26 +376,26 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
 
     // 检查预留端口（展开循环，最多8个，网络字节序直接比较）
     if (cfg->reserved_count > 0 && cfg->reserved_ports[0] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 1 && cfg->reserved_ports[1] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 2 && cfg->reserved_ports[2] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 3 && cfg->reserved_ports[3] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 4 && cfg->reserved_ports[4] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 5 && cfg->reserved_ports[5] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 6 && cfg->reserved_ports[6] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
     if (cfg->reserved_count > 7 && cfg->reserved_ports[7] == inner_src_port)
-        { if (cfg->log_flags & LOG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
+        { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
 
     // 7. 选择公网 IP（通过 hash，直接比较选择）
     __u32 ip_count = cfg->egress_ip_count;
     if (ip_count == 0) {
-        if (cfg->log_flags & LOG_SNAT) {
+        if (cfg->log_flags & LOG_FLG_SNAT) {
             bpf_trace_printk("No egress IPs configured\n", sizeof("No egress IPs configured\n"));
         }
         return XDP_PASS;
@@ -421,7 +421,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     else if (ip_index == 14) outer_src_ip = cfg->egress_ips[14];
     else outer_src_ip = cfg->egress_ips[15];
 
-    if (cfg->log_flags & LOG_SNAT) {
+    if (cfg->log_flags & LOG_FLG_SNAT) {
         bpf_trace_printk("Selected public IP: %x (index=%d)\n",
                          sizeof("Selected public IP: %x (index=%d)\n"),
                          outer_src_ip, ip_index);
@@ -438,13 +438,13 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
         // 检查超时
         __u64 now = bpf_ktime_get_ns();
         if (now - snat->timestamp > cfg->timeout_ns) {
-            if (cfg->log_flags & LOG_SNAT) {
+            if (cfg->log_flags & LOG_FLG_SNAT) {
                 bpf_trace_printk("SNAT entry expired, deleting\n", sizeof("SNAT entry expired, deleting\n"));
             }
             bpf_map_delete_elem(&snat_map, &snat_key);
             snat = NULL;
         } else {
-            if (cfg->log_flags & LOG_SNAT) {
+            if (cfg->log_flags & LOG_FLG_SNAT) {
                 bpf_trace_printk("Existing SNAT entry found, timestamp=%llu\n",
                                  sizeof("Existing SNAT entry found, timestamp=%llu\n"),
                                  snat->timestamp);
@@ -467,7 +467,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
         };
 
         if (bpf_map_update_elem(&snat_map, &snat_key, &new_snat, BPF_ANY) == 0) {
-            if (cfg->log_flags & LOG_SNAT) {
+            if (cfg->log_flags & LOG_FLG_SNAT) {
                 bpf_trace_printk("Created SNAT entry\n", sizeof("Created SNAT entry\n"));
                 bpf_trace_printk("  inner src: %x:%d\n",
                                  sizeof("  inner src: %x:%d\n"),
@@ -481,14 +481,14 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
                                  new_snat.egress_iface);
             }
         } else {
-            if (cfg->log_flags & LOG_SNAT) {
+            if (cfg->log_flags & LOG_FLG_SNAT) {
                 bpf_trace_printk("Failed to create SNAT entry\n", sizeof("Failed to create SNAT entry\n"));
             }
         }
     }
 
     // 丢弃数据包（只记录会话，不做实际转发）
-    if (cfg->log_flags & LOG_SNAT) {
+    if (cfg->log_flags & LOG_FLG_SNAT) {
         bpf_trace_printk("SNAT: Dropping packet after logging session\n",
                          sizeof("SNAT: Dropping packet after logging session\n"));
     }
@@ -520,12 +520,12 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
         dst_port = tcp->dest;
     }
 
-    if (cfg->log_flags & LOG_DNAT) {
+    if (cfg->log_flags & LOG_FLG_DNAT) {
         bpf_trace_printk("=== DNAT DETECTED ===\n", sizeof("=== DNAT DETECTED ===\n"));
     }
 
     // 1. 打印外层五元组
-    if (cfg->log_flags & LOG_DNAT) {
+    if (cfg->log_flags & LOG_FLG_DNAT) {
         bpf_trace_printk("Outer src: %x:%d\n",
                          sizeof("Outer src: %x:%d\n"),
                          ip->saddr, bpf_ntohs(src_port));
@@ -540,7 +540,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     struct dnat_entry *dnat = bpf_map_lookup_elem(&dnat_map, &dnat_key);
 
     if (!dnat) {
-        if (cfg->log_flags & LOG_DNAT) {
+        if (cfg->log_flags & LOG_FLG_DNAT) {
             bpf_trace_printk("No DNAT entry found\n", sizeof("No DNAT entry found\n"));
         }
         return XDP_PASS;
@@ -549,7 +549,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     // 4. 检查超时
     __u64 now = bpf_ktime_get_ns();
     if (now - dnat->timestamp > cfg->timeout_ns) {
-        if (cfg->log_flags & LOG_DNAT) {
+        if (cfg->log_flags & LOG_FLG_DNAT) {
             bpf_trace_printk("DNAT entry expired\n", sizeof("DNAT entry expired\n"));
         }
         // 删除过期条目
@@ -563,7 +563,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     }
 
     // 5. 打印 DNAT 映射信息
-    if (cfg->log_flags & LOG_DNAT) {
+    if (cfg->log_flags & LOG_FLG_DNAT) {
         bpf_trace_printk("DNAT entry found:\n", sizeof("DNAT entry found:\n"));
         bpf_trace_printk("  outer src: %x:%d\n",
                          sizeof("  outer src: %x:%d\n"),
@@ -584,7 +584,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     }
 
     // 丢弃数据包（只记录会话，不做实际转发）
-    if (cfg->log_flags & LOG_DNAT) {
+    if (cfg->log_flags & LOG_FLG_DNAT) {
         bpf_trace_printk("DNAT: Dropping packet after logging session\n",
                          sizeof("DNAT: Dropping packet after logging session\n"));
     }
@@ -614,8 +614,8 @@ int xdp_gateway(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
-    // 打印配置信息（仅首次，当 LOG_CFG 开启时）
-    if (cfg->log_flags & LOG_CFG && !config_printed) {
+    // 打印配置信息（仅首次，当 LOG_FLG_CFG 开启时）
+    if (cfg->log_flags & LOG_FLG_CFG && !config_printed) {
         config_printed = 1;
         print_config(cfg);
     }
@@ -628,10 +628,6 @@ int xdp_gateway(struct xdp_md *ctx) {
 
     // Debug 模式：打印数据包详细信息
     if (flags & CFG_FLAG_DEBUG_ENABLED) {
-        if (cfg->log_flags & LOG_DEBUG_PKG) {
-            bpf_trace_printk("[DEBUG] Calling debug_packet\n",
-                             sizeof("[DEBUG] Calling debug_packet\n"));
-        }
         debug_packet(ctx, data, data_end, cfg);
     }
 

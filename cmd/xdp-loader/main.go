@@ -35,8 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
-		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate,
+	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Debug packet=%v, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
+		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags,
+		cfg.UnifiedConfig.Flags&(1<<6) != 0, // Debug packet enabled
 		cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 
 	// 加载 XDP 程序
@@ -150,8 +151,9 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 					continue
 				}
 
-				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Mirror rate=%d, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
-					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags, cfg.UnifiedConfig.MirrorSampleRate,
+				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Debug packet=%v, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
+					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags,
+					cfg.UnifiedConfig.Flags&(1<<6) != 0, // Debug packet enabled
 					cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 			}
 

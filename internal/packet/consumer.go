@@ -141,15 +141,16 @@ func (c *Consumer) consume() {
 
 // logPacket 格式化输出数据包信息
 func (c *Consumer) logPacket(event *TraceEvent) {
+	packet := event.PacketData[:event.PktLen]
+
+	// 写入 pcap 文件（如果启用）- 不依赖日志开关
+	if c.pcapWriter != nil && len(packet) > 0 {
+		c.pcapWriter.Write(packet)
+	}
+
 	// 检查日志开关（对应 C 端的 LOG_DEBUG_PKG）
 	if !c.logger.DebugPkgEnabled() {
 		return
-	}
-	packet := event.PacketData[:event.PktLen]
-
-	// 写入 pcap 文件（如果启用）
-	if c.pcapWriter != nil && len(packet) > 0 {
-		c.pcapWriter.Write(packet)
 	}
 
 	if len(packet) < 14 {
