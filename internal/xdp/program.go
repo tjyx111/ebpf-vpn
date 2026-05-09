@@ -88,11 +88,6 @@ func (p *Program) EventsRingbuf() *ebpf.Map {
 	return p.objs.EventsRingbuf
 }
 
-// XsksMap 获取 AF_XDP socket Map
-func (p *Program) XsksMap() *ebpf.Map {
-	return p.objs.XsksMap
-}
-
 // DebugEvents 获取 Debug 事件 Ring Buffer
 func (p *Program) DebugEvents() *ebpf.Map {
 	return p.objs.DebugEvents

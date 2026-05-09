@@ -194,12 +194,7 @@ static __always_inline void try_capture_packet(struct xdp_md *ctx,
                                                __u8 dump_pkg_flags,
                                                int force) {
     // 检查是否启用了抓包功能（使用独立的 capture_enabled 配置）
-    if (unlikely(!capture_enabled)) {
-        return;
-    }
-
-    // 检查抓包标志位（是否在 XDP 入口抓包）
-    if (!(dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
+    if (likely(!capture_enabled)) {
         return;
     }
 
@@ -247,6 +242,50 @@ static __always_inline __u64 hash_tuple(__u32 src_ip, __u16 src_port,
     hash = hash * 31 + dst_port;
     hash = hash * 31 + protocol;
     return hash;
+}
+
+// Helper 函数：检查目标 IP 是否是配置的公网 IP
+// 返回值：1=是公网IP, 0=不是公网IP
+static __always_inline __u8 is_public_ip(__u32 dst_ip,
+                                          __u8 egress_ip_count,
+                                          const __u32 *egress_ips) {
+    __u32 is_public = 0;
+
+    // 展开循环以避免验证器问题（最多16个公网IP）
+    if (egress_ip_count > 0 && dst_ip == egress_ips[0])
+        { is_public = 1; }
+    if (egress_ip_count > 1 && dst_ip == egress_ips[1])
+        { is_public = 1; }
+    if (egress_ip_count > 2 && dst_ip == egress_ips[2])
+        { is_public = 1; }
+    if (egress_ip_count > 3 && dst_ip == egress_ips[3])
+        { is_public = 1; }
+    if (egress_ip_count > 4 && dst_ip == egress_ips[4])
+        { is_public = 1; }
+    if (egress_ip_count > 5 && dst_ip == egress_ips[5])
+        { is_public = 1; }
+    if (egress_ip_count > 6 && dst_ip == egress_ips[6])
+        { is_public = 1; }
+    if (egress_ip_count > 7 && dst_ip == egress_ips[7])
+        { is_public = 1; }
+    if (egress_ip_count > 8 && dst_ip == egress_ips[8])
+        { is_public = 1; }
+    if (egress_ip_count > 9 && dst_ip == egress_ips[9])
+        { is_public = 1; }
+    if (egress_ip_count > 10 && dst_ip == egress_ips[10])
+        { is_public = 1; }
+    if (egress_ip_count > 11 && dst_ip == egress_ips[11])
+        { is_public = 1; }
+    if (egress_ip_count > 12 && dst_ip == egress_ips[12])
+        { is_public = 1; }
+    if (egress_ip_count > 13 && dst_ip == egress_ips[13])
+        { is_public = 1; }
+    if (egress_ip_count > 14 && dst_ip == egress_ips[14])
+        { is_public = 1; }
+    if (egress_ip_count > 15 && dst_ip == egress_ips[15])
+        { is_public = 1; }
+
+    return is_public;
 }
 
 // Debug 函数：发送数据包信息到 Ring Buffer
@@ -794,7 +833,10 @@ int xdp_gateway(struct xdp_md *ctx) {
     }
 
     // ========== 入口处抓包（检查规则） ==========
-    try_capture_packet(ctx, data, data_end, ip, XDP_PASS, capture_enabled, dump_pkg_flags, 0);
+        // 检查抓包标志位（是否在 XDP 入口抓包）
+    if (unlikely(dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
+        try_capture_packet(ctx, data, data_end, ip, XDP_PASS, capture_enabled, dump_pkg_flags, 0);
+    }
 
     // Debug 模式：打印数据包详细信息
     if (unlikely(flags & CFG_FLAG_DEBUG_ENABLED)) {
@@ -808,8 +850,8 @@ int xdp_gateway(struct xdp_md *ctx) {
             return XDP_PASS;
         }
 
-        if (flags & CFG_FLAG_UDP_ECHO_ENABLED) {
-            // 强制抓包用于调试
+        // udp echo默认启用
+        if (likely(flags & CFG_FLAG_UDP_ECHO_ENABLED)) {
             if (udp->dest == udp_echo_port) {
                 int ret = xdp_udpecho(eth, ip, udp, data_end, cfg);
                 // UDP Echo 处理完成后强制抓包（不检查规则）
@@ -817,85 +859,29 @@ int xdp_gateway(struct xdp_md *ctx) {
                 return ret;
             }
         }
-    }
 
-    // NAT 逻辑（SNAT 和 DNAT）
-    if (flags & CFG_FLAG_NAT_ENABLED) {
-        // 检查是否为 VPN 报文（UDP 18080）
-        if (ip->protocol == IPPROTO_UDP) {
-            struct udphdr *udp = (void *)(ip + 1);
-            if ((void *)(udp + 1) > data_end) return XDP_PASS;
+        if (udp->dest == vpn_port) {
+            // 检查 VPN magic，如果是 VPN 报文则处理
+            struct vpn_header *vpn = (void *)(udp + 1);
+            if ((void *)(vpn + 1) > data_end) return XDP_PASS;
 
-            if (udp->dest == vpn_port) {
-                // 检查 VPN magic，如果是 VPN 报文则处理
-                struct vpn_header *vpn = (void *)(udp + 1);
-                if ((void *)(vpn + 1) > data_end) return XDP_PASS;
-
-                if ((vpn->first_byte & VPN_MAGIC_MASK) == VPN_MAGIC_VALUE) {
-                    // 优先处理 VPN ICMP 包
-                    int ret = handle_vpn_icmp(ctx, ip, udp, data_end, cfg, log_flags);
-                    if (ret != XDP_PASS) {
-                        return ret;  // 如果是 ICMP 包且已处理，直接返回
-                    }
-
-                    // 其他协议走 SNAT 处理
-                    return detect_and_log_snat(ctx, ip, udp, data_end, cfg, log_flags, port_start, port_end, timeout_ns, egress_iface, egress_ip_count);
+            // 上行流量
+            if ((vpn->first_byte & VPN_MAGIC_MASK) == VPN_MAGIC_VALUE) {
+                // 优先处理 VPN ICMP 包
+                int ret = handle_vpn_icmp(ctx, ip, udp, data_end, cfg, log_flags);
+                if (ret != XDP_PASS) {
+                    return ret;  // 如果是 ICMP 包且已处理，直接返回
                 }
+
+                // 其他协议走 SNAT 处理
+                return detect_and_log_snat(ctx, ip, udp, data_end, cfg, log_flags, port_start, port_end, timeout_ns, egress_iface, egress_ip_count);
+            }
+
+            // 下行流量
+            if (is_public_ip(ip->daddr, egress_ip_count, cfg->egress_ips)) {
+                return detect_and_log_dnat(ip, data_end, cfg, log_flags, timeout_ns);
             }
         }
-
-        // 检查是否为发给公网 IP 的报文（需要 DNAT）
-        // 检查目标 IP 是否是公网 IP
-        __u32 is_public_ip = 0;
-        if (cfg->egress_ip_count > 0 && ip->daddr == cfg->egress_ips[0])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 1 && ip->daddr == cfg->egress_ips[1])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 2 && ip->daddr == cfg->egress_ips[2])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 3 && ip->daddr == cfg->egress_ips[3])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 4 && ip->daddr == cfg->egress_ips[4])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 5 && ip->daddr == cfg->egress_ips[5])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 6 && ip->daddr == cfg->egress_ips[6])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 7 && ip->daddr == cfg->egress_ips[7])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 8 && ip->daddr == cfg->egress_ips[8])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 9 && ip->daddr == cfg->egress_ips[9])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 10 && ip->daddr == cfg->egress_ips[10])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 11 && ip->daddr == cfg->egress_ips[11])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 12 && ip->daddr == cfg->egress_ips[12])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 13 && ip->daddr == cfg->egress_ips[13])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 14 && ip->daddr == cfg->egress_ips[14])
-            { is_public_ip = 1; }
-        if (cfg->egress_ip_count > 15 && ip->daddr == cfg->egress_ips[15])
-            { is_public_ip = 1; }
-
-        if (is_public_ip) {
-            return detect_and_log_dnat(ip, data_end, cfg, log_flags, timeout_ns);
-        }
-    }
-
-    // AF_XDP 重定向
-    if (flags & CFG_FLAG_AFXDP_REDIRECT) {
-        if (match_filter_rule(ip, (void *)(ip + 1), data_end)) {
-            __u32 index = 0;
-            return bpf_redirect_map(&xsks_map, index, 0);
-        }
-    }
-
-    // ICMP
-    if (ip->protocol == IPPROTO_ICMP) {
-        return XDP_PASS;
     }
 
     return XDP_PASS;

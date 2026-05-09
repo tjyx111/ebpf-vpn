@@ -43,7 +43,6 @@ type TOMLConfig struct {
 		MTU         uint32 `toml:"mtu"`
 	} `toml:"network"`
 	Features struct {
-		AfXdpRedirect      bool `toml:"afxdp_redirect"`
 		UDPEchoEnabled     bool `toml:"udp_echo_enabled"`
 		NATEnabled         bool `toml:"nat_enabled"`
 		DebugPacketEnabled bool `toml:"debug_packet_enabled"` // 是否启用 debug_packet 功能
@@ -170,9 +169,6 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	}
 
 	// 设置标志位
-	if tomlCfg.Features.AfXdpRedirect {
-		cfg.Flags |= 1 << 1 // CFG_FLAG_AFXDP_REDIRECT
-	}
 	if tomlCfg.Features.UDPEchoEnabled {
 		cfg.Flags |= 1 << 2 // CFG_FLAG_UDP_ECHO_ENABLED
 	}

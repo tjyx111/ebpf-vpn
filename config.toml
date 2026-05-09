@@ -3,7 +3,6 @@ udp_echo_port = 28080
 mtu = 1500
 
 [features]
-afxdp_redirect = false
 udp_echo_enabled = true
 nat_enabled = true
 debug_packet_enabled = false   # 是否启用 debug_packet 功能（发送固定的测试数据）

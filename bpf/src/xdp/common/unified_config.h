@@ -4,7 +4,6 @@
 #include <linux/types.h>
 
 // 配置标志位定义
-#define CFG_FLAG_AFXDP_REDIRECT        (1 << 1)
 #define CFG_FLAG_UDP_ECHO_ENABLED      (1 << 2)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
 #define CFG_FLAG_DEBUG_ENABLED          (1 << 6)
