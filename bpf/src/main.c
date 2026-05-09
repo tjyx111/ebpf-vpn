@@ -11,6 +11,15 @@
 #include <xdp/app/udp_echo.h>
 #include <xdp/app/trace.h>
 #include <xdp/common/all.h>
+#include <linux/bpf.h>
+
+// Branch prediction hints for logging/capture (cold paths)
+#ifndef likely
+#define likely(x) __builtin_expect(!!(x), 1)
+#endif
+#ifndef unlikely
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
 
 // 引入结构体定义
 #include <xdp/common/unified_config.h>
@@ -181,15 +190,16 @@ static __always_inline void try_capture_packet(struct xdp_md *ctx,
                                                void *data_end,
                                                struct iphdr *ip,
                                                __u32 xdp_action,
-                                               struct unified_config *cfg,
+                                               __u8 capture_enabled,
+                                               __u8 dump_pkg_flags,
                                                int force) {
     // 检查是否启用了抓包功能（使用独立的 capture_enabled 配置）
-    if (!cfg->capture_enabled) {
+    if (unlikely(!capture_enabled)) {
         return;
     }
 
     // 检查抓包标志位（是否在 XDP 入口抓包）
-    if (!(cfg->dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
+    if (!(dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
         return;
     }
 
@@ -243,16 +253,16 @@ static __always_inline __u64 hash_tuple(__u32 src_ip, __u16 src_port,
 static __always_inline void debug_packet(struct xdp_md *ctx,
                                          void *data,
                                          void *data_end,
-                                         struct unified_config *cfg) {
+                                         __u32 log_flags) {
 
-    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
+    if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
         bpf_trace_printk("[DEBUG CHECK] enter", sizeof("[DEBUG CHECK] enter"));
     }
 
     // 分配 Ring Buffer 空间
     struct debug_event *e = bpf_ringbuf_reserve(&debug_events, sizeof(*e), 0);
     if (!e) {
-        if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
+        if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
             bpf_trace_printk("[DEBUG CHECK] bpf_ringbuf_reserve failed", sizeof("[DEBUG CHECK] bpf_ringbuf_reserve failed"));
         }
         return;  // 分配失败，直接返回
@@ -305,18 +315,19 @@ static __always_inline void debug_packet(struct xdp_md *ctx,
 
     // 时间戳
     e->timestamp = bpf_ktime_get_ns();
-    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
+    if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
         bpf_trace_printk("[DEBUG CHECK] filled event, timestamp=%llu", sizeof("[DEBUG CHECK] filled event, timestamp=%llu"), e->timestamp);
     }
     bpf_ringbuf_submit(e, 0);
 }
 
-// 检测并记录 SNAT 会话（VPN 报文 → 公网报文）
-static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
-                                                  struct iphdr *outer_ip,
-                                                  struct udphdr *outer_udp,
-                                                  void *data_end,
-                                                  struct unified_config *cfg) {
+// 处理 VPN ICMP 包并打印详细信息
+static __always_inline int handle_vpn_icmp(struct xdp_md *ctx,
+                                           struct iphdr *outer_ip,
+                                           struct udphdr *outer_udp,
+                                           void *data_end,
+                                           struct unified_config *cfg,
+                                           __u32 log_flags) {
     // 1. 检查 VPN 头部
     struct vpn_header *vpn = (void *)(outer_udp + 1);
     if ((void *)(vpn + 1) > data_end)
@@ -325,7 +336,154 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     if ((vpn->first_byte & VPN_MAGIC_MASK) != VPN_MAGIC_VALUE)
         return XDP_PASS;  // 不是 VPN 报文
 
-    if (cfg->log_flags & LOG_FLG_SNAT) {
+    // 2. 提取内层 IP 包
+    struct iphdr *inner_ip = (void *)(vpn + 1);
+    if ((void *)(inner_ip + 1) > data_end)
+        return XDP_PASS;
+
+    // 只处理 ICMP 包
+    if (inner_ip->protocol != IPPROTO_ICMP)
+        return XDP_PASS;
+
+    // 3. 提取 ICMP 头部
+    struct icmphdr *icmp = (void *)(inner_ip + 1);
+    if ((void *)(icmp + 1) > data_end)
+        return XDP_PASS;
+
+    // 4. 打印 VPN ICMP 信息（通过 LOG_FLG_ICMP 控制）
+    if (unlikely(log_flags & LOG_FLG_ICMP)) {
+        bpf_trace_printk("=== VPN ICMP DETECTED ===\n", sizeof("=== VPN ICMP DETECTED ===\n"));
+
+        // 打印 VPN 头部信息
+        bpf_trace_printk("VPN Header: Magic=0x%x, Proto=%d, SessionID=%d\n",
+                         sizeof("VPN Header: Magic=0x%x, Proto=%d, SessionID=%d\n"),
+                         vpn->first_byte, vpn->next_protocol, vpn->session_id);
+
+        // 打印内层 IP 头部信息
+        bpf_trace_printk("Inner IP: Src=%x, Dst=%x, Proto=%d\n",
+                         sizeof("Inner IP: Src=%x, Dst=%x, Proto=%d\n"),
+                         bpf_ntohl(inner_ip->saddr), bpf_ntohl(inner_ip->daddr), inner_ip->protocol);
+        bpf_trace_printk("Inner IP: TTL=%d, ID=%d\n",
+                         sizeof("Inner IP: TTL=%d, ID=%d\n"),
+                         inner_ip->ttl, bpf_ntohs(inner_ip->id));
+
+        // 打印 ICMP 头部信息
+        bpf_trace_printk("ICMP: Type=%d, Code=%d, ID=%d\n",
+                         sizeof("ICMP: Type=%d, Code=%d, ID=%d\n"),
+                         icmp->type, icmp->code, bpf_ntohs(icmp->un.echo.id));
+        bpf_trace_printk("ICMP: Seq=%d\n",
+                         sizeof("ICMP: Seq=%d\n"),
+                         bpf_ntohs(icmp->un.echo.sequence));
+    }
+
+    // 5. 使用 bpf_fib_lookup 查找路由
+    struct bpf_fib_lookup fib_params = {};
+    int rc;
+
+    // 初始化 FIB 查找参数
+    fib_params.family = AF_INET;
+    fib_params.tos = inner_ip->tos;
+    fib_params.l4_protocol = inner_ip->protocol;
+    fib_params.sport = 0;
+    fib_params.dport = 0;
+    fib_params.tot_len = bpf_ntohs(inner_ip->tot_len);
+    fib_params.ipv4_src = inner_ip->saddr;  // 内层源 IP
+    fib_params.ipv4_dst = inner_ip->daddr;  // 内层目标 IP
+
+    // 设置输入接口
+    fib_params.ifindex = ctx->ingress_ifindex;
+
+    // 执行 FIB 查找
+    rc = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), BPF_FIB_LOOKUP_OUTPUT);
+
+    if (unlikely(log_flags & LOG_FLG_ICMP)) {
+        if (rc == 0) {
+            // 查找成功
+            bpf_trace_printk("FIB Lookup: Success\n", sizeof("FIB Lookup: Success\n"));
+            bpf_trace_printk("  IfIndex: %d\n", sizeof("  IfIndex: %d\n"), fib_params.ifindex);
+            bpf_trace_printk("  Src MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                             sizeof("  Src MAC: %02x:%02x:%02x:%02x:%02x:%02x\n"),
+                             fib_params.smac[0], fib_params.smac[1]);
+            bpf_trace_printk("  Src MAC2: %02x:%02x:%02x:%02x\n",
+                             sizeof("  Src MAC2: %02x:%02x:%02x:%02x\n"),
+                             fib_params.smac[2], fib_params.smac[3]);
+            bpf_trace_printk("  Dst MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                             sizeof("  Dst MAC: %02x:%02x:%02x:%02x:%02x:%02x\n"),
+                             fib_params.dmac[0], fib_params.dmac[1]);
+            bpf_trace_printk("  Dst MAC2: %02x:%02x:%02x:%02x\n",
+                             sizeof("  Dst MAC2: %02x:%02x:%02x:%02x\n"),
+                             fib_params.dmac[2], fib_params.dmac[3]);
+            bpf_trace_printk("  Src IP: %x\n", sizeof("  Src IP: %x\n"), bpf_ntohl(fib_params.ipv4_src));
+            bpf_trace_printk("  Dst IP: %x\n", sizeof("  Dst IP: %x\n"), bpf_ntohl(fib_params.ipv4_dst));
+        } else {
+            // 查找失败
+            bpf_trace_printk("FIB Lookup: Failed, rc=%d\n", sizeof("FIB Lookup: Failed, rc=%d\n"), rc);
+
+            // 打印失败原因
+            switch (rc) {
+                case BPF_FIB_LKUP_RET_SUCCESS:
+                    break;
+                case BPF_FIB_LKUP_RET_BLACKHOLE:
+                    bpf_trace_printk("  Reason: Blackhole\n", sizeof("  Reason: Blackhole\n"));
+                    break;
+                case BPF_FIB_LKUP_RET_UNREACHABLE:
+                    bpf_trace_printk("  Reason: Unreachable\n", sizeof("  Reason: Unreachable\n"));
+                    break;
+                case BPF_FIB_LKUP_RET_NO_NEIGH:
+                    bpf_trace_printk("  Reason: No neighbor\n", sizeof("  Reason: No neighbor\n"));
+                    break;
+                case BPF_FIB_LKUP_RET_FRAG_NEEDED:
+                    bpf_trace_printk("  Reason: Fragment needed\n", sizeof("  Reason: Fragment needed\n"));
+                    break;
+                default:
+                    bpf_trace_printk("  Reason: Unknown error (rc=%d)\n", sizeof("  Reason: Unknown error (rc=%d)\n"), rc);
+                    break;
+            }
+        }
+    }
+
+    // 6. 打印 ICMP 数据负载（最多 16 字节，避免复杂栈操作）
+    if (unlikely(log_flags & LOG_FLG_ICMP)) {
+        void *icmp_data = (void *)(icmp + 1);
+
+        // 使用显式边界检查，让验证器能够正确跟踪
+        if (icmp_data + 8 <= data_end) {
+            __u32 val0 = *(__u32 *)(icmp_data);
+            __u32 val4 = *(__u32 *)(icmp_data + 4);
+            bpf_trace_printk("Data: %08x %08x\n", sizeof("Data: %08x %08x\n"), val0, val4);
+        }
+    }
+
+    // 丢弃数据包（只打印信息，不做实际转发）
+    if (unlikely(log_flags & LOG_FLG_ICMP)) {
+        bpf_trace_printk("VPN ICMP: Dropping packet after logging\n",
+                         sizeof("VPN ICMP: Dropping packet after logging\n"));
+    }
+
+    return XDP_DROP;
+}
+
+// 检测并记录 SNAT 会话（VPN 报文 → 公网报文）
+static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
+                                                  struct iphdr *outer_ip,
+                                                  struct udphdr *outer_udp,
+                                                  void *data_end,
+                                                  struct unified_config *cfg,
+                                                  __u32 log_flags,
+                                                  __u16 port_start,
+                                                  __u16 port_end,
+                                                  __u64 timeout_ns,
+                                                  __u8 egress_iface,
+                                                  __u8 egress_ip_count) {
+    // 1. 检查 VPN 头部
+    struct vpn_header *vpn = (void *)(outer_udp + 1);
+    if ((void *)(vpn + 1) > data_end)
+        return XDP_PASS;
+
+    if ((vpn->first_byte & VPN_MAGIC_MASK) != VPN_MAGIC_VALUE)
+        return XDP_PASS;  // 不是 VPN 报文
+
+    if (unlikely(log_flags & LOG_FLG_SNAT)) {
         bpf_trace_printk("=== SNAT DETECTED ===\n", sizeof("=== SNAT DETECTED ===\n"));
     }
 
@@ -352,7 +510,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     }
 
     // 5. 打印内层五元组
-    if (cfg->log_flags & LOG_FLG_SNAT) {
+    if (unlikely(log_flags & LOG_FLG_SNAT)) {
         bpf_trace_printk("Inner: %x:%d -> %x:%d\n",
                          sizeof("Inner: %x:%d -> %x:%d\n"),
                          inner_ip->saddr, bpf_ntohs(inner_src_port),
@@ -363,13 +521,13 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     }
 
     // 6. 检查端口范围（直接使用网络字节序比较）
-    if (inner_src_port < cfg->port_start || inner_src_port > cfg->port_end) {
-        if (cfg->log_flags & LOG_FLG_SNAT) {
+    if (inner_src_port < port_start || inner_src_port > port_end) {
+        if (unlikely(log_flags & LOG_FLG_SNAT)) {
             bpf_trace_printk("Port %d not in range [%d,%d]\n",
                              sizeof("Port %d not in range [%d,%d]\n"),
                              bpf_ntohs(inner_src_port),
-                             bpf_ntohs(cfg->port_start),
-                             bpf_ntohs(cfg->port_end));
+                             bpf_ntohs(port_start),
+                             bpf_ntohs(port_end));
         }
         return XDP_PASS;
     }
@@ -393,9 +551,9 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
         { if (cfg->log_flags & LOG_FLG_SNAT) { bpf_trace_printk("Port %d reserved\n", sizeof("Port %d reserved\n"), bpf_ntohs(inner_src_port)); } return XDP_PASS; }
 
     // 7. 选择公网 IP（通过 hash，直接比较选择）
-    __u32 ip_count = cfg->egress_ip_count;
+    __u32 ip_count = egress_ip_count;
     if (ip_count == 0) {
-        if (cfg->log_flags & LOG_FLG_SNAT) {
+        if (unlikely(log_flags & LOG_FLG_SNAT)) {
             bpf_trace_printk("No egress IPs configured\n", sizeof("No egress IPs configured\n"));
         }
         return XDP_PASS;
@@ -421,7 +579,7 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     else if (ip_index == 14) outer_src_ip = cfg->egress_ips[14];
     else outer_src_ip = cfg->egress_ips[15];
 
-    if (cfg->log_flags & LOG_FLG_SNAT) {
+    if (unlikely(log_flags & LOG_FLG_SNAT)) {
         bpf_trace_printk("Selected public IP: %x (index=%d)\n",
                          sizeof("Selected public IP: %x (index=%d)\n"),
                          outer_src_ip, ip_index);
@@ -437,14 +595,14 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
     if (snat) {
         // 检查超时
         __u64 now = bpf_ktime_get_ns();
-        if (now - snat->timestamp > cfg->timeout_ns) {
-            if (cfg->log_flags & LOG_FLG_SNAT) {
+        if (now - snat->timestamp > timeout_ns) {
+            if (unlikely(log_flags & LOG_FLG_SNAT)) {
                 bpf_trace_printk("SNAT entry expired, deleting\n", sizeof("SNAT entry expired, deleting\n"));
             }
             bpf_map_delete_elem(&snat_map, &snat_key);
             snat = NULL;
         } else {
-            if (cfg->log_flags & LOG_FLG_SNAT) {
+            if (unlikely(log_flags & LOG_FLG_SNAT)) {
                 bpf_trace_printk("Existing SNAT entry found, timestamp=%llu\n",
                                  sizeof("Existing SNAT entry found, timestamp=%llu\n"),
                                  snat->timestamp);
@@ -462,12 +620,12 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
             .inner_protocol = inner_ip->protocol,
             .outer_src_ip = outer_src_ip,
             .outer_src_port = inner_src_port,
-            .egress_iface = cfg->egress_iface,
+            .egress_iface = egress_iface,
             .timestamp = bpf_ktime_get_ns(),
         };
 
         if (bpf_map_update_elem(&snat_map, &snat_key, &new_snat, BPF_ANY) == 0) {
-            if (cfg->log_flags & LOG_FLG_SNAT) {
+            if (unlikely(log_flags & LOG_FLG_SNAT)) {
                 bpf_trace_printk("Created SNAT entry\n", sizeof("Created SNAT entry\n"));
                 bpf_trace_printk("  inner src: %x:%d\n",
                                  sizeof("  inner src: %x:%d\n"),
@@ -481,14 +639,14 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
                                  new_snat.egress_iface);
             }
         } else {
-            if (cfg->log_flags & LOG_FLG_SNAT) {
+            if (unlikely(log_flags & LOG_FLG_SNAT)) {
                 bpf_trace_printk("Failed to create SNAT entry\n", sizeof("Failed to create SNAT entry\n"));
             }
         }
     }
 
     // 丢弃数据包（只记录会话，不做实际转发）
-    if (cfg->log_flags & LOG_FLG_SNAT) {
+    if (unlikely(log_flags & LOG_FLG_SNAT)) {
         bpf_trace_printk("SNAT: Dropping packet after logging session\n",
                          sizeof("SNAT: Dropping packet after logging session\n"));
     }
@@ -499,7 +657,9 @@ static __always_inline int detect_and_log_snat(struct xdp_md *ctx,
 // 检测并记录 DNAT 会话（公网报文 → VPN 报文）
 static __always_inline int detect_and_log_dnat(struct iphdr *ip,
                                                   void *data_end,
-                                                  struct unified_config *cfg) {
+                                                  struct unified_config *cfg,
+                                                  __u32 log_flags,
+                                                  __u64 timeout_ns) {
     // 只处理 TCP/UDP
     if (ip->protocol != IPPROTO_UDP && ip->protocol != IPPROTO_TCP)
         return XDP_PASS;
@@ -520,12 +680,12 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
         dst_port = tcp->dest;
     }
 
-    if (cfg->log_flags & LOG_FLG_DNAT) {
+    if (unlikely(log_flags & LOG_FLG_DNAT)) {
         bpf_trace_printk("=== DNAT DETECTED ===\n", sizeof("=== DNAT DETECTED ===\n"));
     }
 
     // 1. 打印外层五元组
-    if (cfg->log_flags & LOG_FLG_DNAT) {
+    if (unlikely(log_flags & LOG_FLG_DNAT)) {
         bpf_trace_printk("Outer src: %x:%d\n",
                          sizeof("Outer src: %x:%d\n"),
                          ip->saddr, bpf_ntohs(src_port));
@@ -540,7 +700,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     struct dnat_entry *dnat = bpf_map_lookup_elem(&dnat_map, &dnat_key);
 
     if (!dnat) {
-        if (cfg->log_flags & LOG_FLG_DNAT) {
+        if (unlikely(log_flags & LOG_FLG_DNAT)) {
             bpf_trace_printk("No DNAT entry found\n", sizeof("No DNAT entry found\n"));
         }
         return XDP_PASS;
@@ -548,8 +708,8 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
 
     // 4. 检查超时
     __u64 now = bpf_ktime_get_ns();
-    if (now - dnat->timestamp > cfg->timeout_ns) {
-        if (cfg->log_flags & LOG_FLG_DNAT) {
+    if (now - dnat->timestamp > timeout_ns) {
+        if (unlikely(log_flags & LOG_FLG_DNAT)) {
             bpf_trace_printk("DNAT entry expired\n", sizeof("DNAT entry expired\n"));
         }
         // 删除过期条目
@@ -563,7 +723,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     }
 
     // 5. 打印 DNAT 映射信息
-    if (cfg->log_flags & LOG_FLG_DNAT) {
+    if (unlikely(log_flags & LOG_FLG_DNAT)) {
         bpf_trace_printk("DNAT entry found:\n", sizeof("DNAT entry found:\n"));
         bpf_trace_printk("  outer src: %x:%d\n",
                          sizeof("  outer src: %x:%d\n"),
@@ -584,7 +744,7 @@ static __always_inline int detect_and_log_dnat(struct iphdr *ip,
     }
 
     // 丢弃数据包（只记录会话，不做实际转发）
-    if (cfg->log_flags & LOG_FLG_DNAT) {
+    if (unlikely(log_flags & LOG_FLG_DNAT)) {
         bpf_trace_printk("DNAT: Dropping packet after logging session\n",
                          sizeof("DNAT: Dropping packet after logging session\n"));
     }
@@ -614,21 +774,31 @@ int xdp_gateway(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    // 复制到栈变量（避免验证器边界检查，提升性能）
+    __u8 flags = cfg->flags;
+    __u32 log_flags = cfg->log_flags;
+    __u8 capture_enabled = cfg->capture_enabled;
+    __u8 dump_pkg_flags = cfg->dump_pkg_flags;
+    __u16 udp_echo_port = cfg->udp_echo_port;
+    __u16 vpn_port = cfg->vpn_port;
+    __u16 port_start = cfg->port_start;
+    __u16 port_end = cfg->port_end;
+    __u64 timeout_ns = cfg->timeout_ns;
+    __u8 egress_iface = cfg->egress_iface;
+    __u8 egress_ip_count = cfg->egress_ip_count;
+
     // 打印配置信息（仅首次，当 LOG_FLG_CFG 开启时）
-    if (cfg->log_flags & LOG_FLG_CFG && !config_printed) {
+    if (unlikely(log_flags & LOG_FLG_CFG) && !config_printed) {
         config_printed = 1;
         print_config(cfg);
     }
 
-    // 复制到栈变量（避免验证器边界检查）
-    __u8 flags = cfg->flags;
-
     // ========== 入口处抓包（检查规则） ==========
-    try_capture_packet(ctx, data, data_end, ip, XDP_PASS, cfg, 0);
+    try_capture_packet(ctx, data, data_end, ip, XDP_PASS, capture_enabled, dump_pkg_flags, 0);
 
     // Debug 模式：打印数据包详细信息
-    if (flags & CFG_FLAG_DEBUG_ENABLED) {
-        debug_packet(ctx, data, data_end, cfg);
+    if (unlikely(flags & CFG_FLAG_DEBUG_ENABLED)) {
+        debug_packet(ctx, data, data_end, log_flags);
     }
 
     // UDP Echo
@@ -640,10 +810,10 @@ int xdp_gateway(struct xdp_md *ctx) {
 
         if (flags & CFG_FLAG_UDP_ECHO_ENABLED) {
             // 强制抓包用于调试
-            if (udp->dest == cfg->udp_echo_port) {
+            if (udp->dest == udp_echo_port) {
                 int ret = xdp_udpecho(eth, ip, udp, data_end, cfg);
                 // UDP Echo 处理完成后强制抓包（不检查规则）
-                try_capture_packet(ctx, data, data_end, ip, ret, cfg, 1);
+                try_capture_packet(ctx, data, data_end, ip, ret, capture_enabled, dump_pkg_flags, 1);
                 return ret;
             }
         }
@@ -656,13 +826,20 @@ int xdp_gateway(struct xdp_md *ctx) {
             struct udphdr *udp = (void *)(ip + 1);
             if ((void *)(udp + 1) > data_end) return XDP_PASS;
 
-            if (udp->dest == cfg->vpn_port) {
-                // 检查 VPN magic，如果是 VPN 报文则处理 SNAT
+            if (udp->dest == vpn_port) {
+                // 检查 VPN magic，如果是 VPN 报文则处理
                 struct vpn_header *vpn = (void *)(udp + 1);
                 if ((void *)(vpn + 1) > data_end) return XDP_PASS;
 
                 if ((vpn->first_byte & VPN_MAGIC_MASK) == VPN_MAGIC_VALUE) {
-                    return detect_and_log_snat(ctx, ip, udp, data_end, cfg);
+                    // 优先处理 VPN ICMP 包
+                    int ret = handle_vpn_icmp(ctx, ip, udp, data_end, cfg, log_flags);
+                    if (ret != XDP_PASS) {
+                        return ret;  // 如果是 ICMP 包且已处理，直接返回
+                    }
+
+                    // 其他协议走 SNAT 处理
+                    return detect_and_log_snat(ctx, ip, udp, data_end, cfg, log_flags, port_start, port_end, timeout_ns, egress_iface, egress_ip_count);
                 }
             }
         }
@@ -704,7 +881,7 @@ int xdp_gateway(struct xdp_md *ctx) {
             { is_public_ip = 1; }
 
         if (is_public_ip) {
-            return detect_and_log_dnat(ip, data_end, cfg);
+            return detect_and_log_dnat(ip, data_end, cfg, log_flags, timeout_ns);
         }
     }
 

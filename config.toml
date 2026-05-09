@@ -12,17 +12,10 @@ debug_packet_enabled = false   # 是否启用 debug_packet 功能（发送固定
 # 日志标志位配置（使用 log_flg_ 前缀，与 C 代码保持统一）
 # 所有标志位都是布尔值，true = 启用，false = 禁用
 log_flg_debug_pkt = false       # 调试数据包处理详情
-log_flg_udpecho = true          # UDP Echo 相关日志
 log_flg_snat = false            # SNAT 处理日志
 log_flg_dnat = false            # DNAT 处理日志
 log_flg_cfg = false             # 配置信息日志
-log_flg_vpn_enc = false         # VPN 封装日志
-log_flg_vpn_dec = false         # VPN 解封装日志
-log_flg_icmp = false            # ICMP 处理日志
-log_flg_capture = false         # 抓包相关日志
-log_flg_error = true            # 错误日志
-log_flg_warn = true             # 警告日志
-log_flg_info = false            # 信息日志
+log_flg_icmp = true             # ICMP 处理日志（启用 VPN ICMP 调试）
 
 # 抓包配置
 [capture]

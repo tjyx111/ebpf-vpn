@@ -8,7 +8,7 @@
 #define MTU 1500
 
 static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, struct udphdr *udp, void *data_end, struct unified_config *cfg) {
-    if (cfg->log_flags & LOG_UDPECHO) {
+    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
         bpf_trace_printk("UDP Echo enter", sizeof("UDP Echo enter"));
     }
 

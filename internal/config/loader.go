@@ -50,17 +50,10 @@ type TOMLConfig struct {
 	} `toml:"features"`
 	Tracing struct {
 		LogFlgDebugPkt bool `toml:"log_flg_debug_pkt"` // 调试数据包处理
-		LogFlgUdpEcho  bool `toml:"log_flg_udpecho"`   // UDP Echo 相关日志
 		LogFlgSnat     bool `toml:"log_flg_snat"`      // SNAT 处理日志
 		LogFlgDnat     bool `toml:"log_flg_dnat"`      // DNAT 处理日志
 		LogFlgCfg      bool `toml:"log_flg_cfg"`       // 配置相关日志
-		LogFlgVpnEnc   bool `toml:"log_flg_vpn_enc"`   // VPN 封装日志
-		LogFlgVpnDec   bool `toml:"log_flg_vpn_dec"`   // VPN 解封装日志
 		LogFlgIcmp     bool `toml:"log_flg_icmp"`      // ICMP 处理日志
-		LogFlgCapture  bool `toml:"log_flg_capture"`   // 抓包相关日志
-		LogFlgError    bool `toml:"log_flg_error"`     // 错误日志
-		LogFlgWarn     bool `toml:"log_flg_warn"`      // 警告日志
-		LogFlgInfo     bool `toml:"log_flg_info"`      // 信息日志
 	} `toml:"tracing"`
 	Capture struct {
 		Enabled      bool   `toml:"enabled"`
@@ -149,9 +142,6 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	if tomlCfg.Tracing.LogFlgDebugPkt {
 		logFlags |= 1 << 0 // LOG_FLG_DEBUG_PKT
 	}
-	if tomlCfg.Tracing.LogFlgUdpEcho {
-		logFlags |= 1 << 1 // LOG_FLG_UDPECHO
-	}
 	if tomlCfg.Tracing.LogFlgSnat {
 		logFlags |= 1 << 2 // LOG_FLG_SNAT
 	}
@@ -161,26 +151,8 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	if tomlCfg.Tracing.LogFlgCfg {
 		logFlags |= 1 << 4 // LOG_FLG_CFG
 	}
-	if tomlCfg.Tracing.LogFlgVpnEnc {
-		logFlags |= 1 << 5 // LOG_FLG_VPN_ENC
-	}
-	if tomlCfg.Tracing.LogFlgVpnDec {
-		logFlags |= 1 << 6 // LOG_FLG_VPN_DEC
-	}
 	if tomlCfg.Tracing.LogFlgIcmp {
 		logFlags |= 1 << 7 // LOG_FLG_ICMP
-	}
-	if tomlCfg.Tracing.LogFlgCapture {
-		logFlags |= 1 << 8 // LOG_FLG_CAPTURE
-	}
-	if tomlCfg.Tracing.LogFlgError {
-		logFlags |= 1 << 9 // LOG_FLG_ERROR
-	}
-	if tomlCfg.Tracing.LogFlgWarn {
-		logFlags |= 1 << 10 // LOG_FLG_WARN
-	}
-	if tomlCfg.Tracing.LogFlgInfo {
-		logFlags |= 1 << 11 // LOG_FLG_INFO
 	}
 
 	cfg := &UnifiedConfig{
