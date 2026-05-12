@@ -1,0 +1,12 @@
+[package]
+name = "xdp-prog"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aya = { version = "0.11", features = ["build-bpf"] }
+aya-log = "0.1"
+aya-log-ebpf = "0.1"
+
+[build-dependencies]
+aya-build = "0.11"

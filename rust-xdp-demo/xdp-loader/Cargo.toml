@@ -1,0 +1,16 @@
+[package]
+name = "xdp-loader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "xdp-loader"
+path = "src/main.rs"
+
+[dependencies]
+aya = "0.11"
+aya-log = "0.1"
+clap = { version = "4.0", features = ["derive"] }
+log = "0.4"
+env_logger = "0.10"
+anyhow = "1.0"
