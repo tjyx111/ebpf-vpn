@@ -57,11 +57,11 @@ struct {
     __uint(max_entries, 65536);
 } dnat_map SEC(".maps");
 
-// Debug 事件 Ring Buffer
+// 日志事件 Ring Buffer
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024);  // 256KB
-} debug_events SEC(".maps");
+} log_events SEC(".maps");
 
 // 全局变量：配置是否已打印（需要 Linux 5.2+）
 volatile int config_printed = 0;
@@ -288,78 +288,6 @@ static __always_inline __u8 is_public_ip(__u32 dst_ip,
     return is_public;
 }
 
-// Debug 函数：发送数据包信息到 Ring Buffer
-static __always_inline void debug_packet(struct xdp_md *ctx,
-                                         void *data,
-                                         void *data_end,
-                                         __u32 log_flags) {
-
-    if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
-        bpf_trace_printk("[DEBUG CHECK] enter", sizeof("[DEBUG CHECK] enter"));
-    }
-
-    // 分配 Ring Buffer 空间
-    struct debug_event *e = bpf_ringbuf_reserve(&debug_events, sizeof(*e), 0);
-    if (!e) {
-        if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
-            bpf_trace_printk("[DEBUG CHECK] bpf_ringbuf_reserve failed", sizeof("[DEBUG CHECK] bpf_ringbuf_reserve failed"));
-        }
-        return;  // 分配失败，直接返回
-    }
-
-
-    // 填充固定的测试数据
-    __builtin_memset(e, 0, sizeof(*e));
-
-    // 外层 MAC (固定值: AA:BB:CC:DD:EE:FF -> 11:22:33:44:55:66)
-    e->outer_src_mac[0] = 0xAA; e->outer_src_mac[1] = 0xBB;
-    e->outer_src_mac[2] = 0xCC; e->outer_src_mac[3] = 0xDD;
-    e->outer_src_mac[4] = 0xEE; e->outer_src_mac[5] = 0xFF;
-
-    e->outer_dst_mac[0] = 0x11; e->outer_dst_mac[1] = 0x22;
-    e->outer_dst_mac[2] = 0x33; e->outer_dst_mac[3] = 0x44;
-    e->outer_dst_mac[4] = 0x55; e->outer_dst_mac[5] = 0x66;
-
-    // 外层 IP (固定值: 192.168.1.1 -> 10.0.0.1)
-    e->outer_src_ip = 0xC0A80101;  // 192.168.1.1
-    e->outer_dst_ip = 0x0A000001;  // 10.0.0.1
-    e->outer_protocol = 17;        // UDP
-    e->outer_src_port = 12345;
-    e->outer_dst_port = 18080;     // VPN 端口
-
-    // VPN 头 (固定值)
-    e->vpn_first_byte = 0x90;
-    e->vpn_next_proto = 1;         // IPv4
-    e->vpn_flags = 0;
-    e->vpn_session_id = 12345;
-
-    // 内层 IP (固定值: 172.16.0.1 -> 8.8.8.8)
-    e->inner_src_ip = 0xAC100001;  // 172.16.0.1
-    e->inner_dst_ip = 0x08080808;  // 8.8.8.8
-    e->inner_protocol = 6;         // TCP
-    e->inner_src_port = 8080;
-    e->inner_dst_port = 443;
-
-    // 路由信息 (固定值)
-    e->fib_ifindex = 2;            // eth2
-    e->fib_src_mac[0] = 0x22; e->fib_src_mac[1] = 0x33;
-    e->fib_src_mac[2] = 0x44; e->fib_src_mac[3] = 0x55;
-    e->fib_src_mac[4] = 0x66; e->fib_src_mac[5] = 0x77;
-
-    e->fib_dst_mac[0] = 0xAA; e->fib_dst_mac[1] = 0xBB;
-    e->fib_dst_mac[2] = 0xCC; e->fib_dst_mac[3] = 0xDD;
-    e->fib_dst_mac[4] = 0xEE; e->fib_dst_mac[5] = 0xFF;
-
-    e->fib_result = 0;             // 成功
-
-    // 时间戳
-    e->timestamp = bpf_ktime_get_ns();
-    if (unlikely(log_flags & LOG_FLG_DEBUG_PKT)) {
-        bpf_trace_printk("[DEBUG CHECK] filled event, timestamp=%llu", sizeof("[DEBUG CHECK] filled event, timestamp=%llu"), e->timestamp);
-    }
-    bpf_ringbuf_submit(e, 0);
-}
-
 // 处理 VPN ICMP 包并打印详细信息
 static __always_inline int handle_vpn_icmp(struct xdp_md *ctx,
                                            struct iphdr *outer_ip,
@@ -391,28 +319,11 @@ static __always_inline int handle_vpn_icmp(struct xdp_md *ctx,
 
     // 4. 打印 VPN ICMP 信息（通过 LOG_FLG_ICMP 控制）
     if (unlikely(log_flags & LOG_FLG_ICMP)) {
-        bpf_trace_printk("=== VPN ICMP DETECTED ===\n", sizeof("=== VPN ICMP DETECTED ===\n"));
-
-        // 打印 VPN 头部信息
-        bpf_trace_printk("VPN Header: Magic=0x%x, Proto=%d, SessionID=%d\n",
-                         sizeof("VPN Header: Magic=0x%x, Proto=%d, SessionID=%d\n"),
-                         vpn->first_byte, vpn->next_protocol, vpn->session_id);
-
-        // 打印内层 IP 头部信息
-        bpf_trace_printk("Inner IP: Src=%x, Dst=%x, Proto=%d\n",
-                         sizeof("Inner IP: Src=%x, Dst=%x, Proto=%d\n"),
-                         bpf_ntohl(inner_ip->saddr), bpf_ntohl(inner_ip->daddr), inner_ip->protocol);
-        bpf_trace_printk("Inner IP: TTL=%d, ID=%d\n",
-                         sizeof("Inner IP: TTL=%d, ID=%d\n"),
-                         inner_ip->ttl, bpf_ntohs(inner_ip->id));
-
-        // 打印 ICMP 头部信息
-        bpf_trace_printk("ICMP: Type=%d, Code=%d, ID=%d\n",
-                         sizeof("ICMP: Type=%d, Code=%d, ID=%d\n"),
-                         icmp->type, icmp->code, bpf_ntohs(icmp->un.echo.id));
-        bpf_trace_printk("ICMP: Seq=%d\n",
-                         sizeof("ICMP: Seq=%d\n"),
-                         bpf_ntohs(icmp->un.echo.sequence));
+        bpf_trace_printk("Packet: %pI4 -> %pI4\n", 
+                 sizeof("Packet: %pI4 -> %pI4\n"), 
+                 &inner_ip->saddr,               // 传地址！
+                 &inner_ip->daddr               // 传地址！
+        );
     }
 
     // 5. 使用 bpf_fib_lookup 查找路由
@@ -836,11 +747,6 @@ int xdp_gateway(struct xdp_md *ctx) {
         // 检查抓包标志位（是否在 XDP 入口抓包）
     if (unlikely(dump_pkg_flags & DUMP_PKG_XDP_ENTRY)) {
         try_capture_packet(ctx, data, data_end, ip, XDP_PASS, capture_enabled, dump_pkg_flags, 0);
-    }
-
-    // Debug 模式：打印数据包详细信息
-    if (unlikely(flags & CFG_FLAG_DEBUG_ENABLED)) {
-        debug_packet(ctx, data, data_end, log_flags);
     }
 
     // UDP Echo

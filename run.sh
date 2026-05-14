@@ -1,3 +1,4 @@
 #!/bin/bash
-
-./ebpf-vpn -iface=enp0s8 -pcap=/tmp/vpn_capture.pcap
+set -e
+make build
+./ebpf-vpn -iface=lo -pcap=/tmp/vpn_capture.pcap

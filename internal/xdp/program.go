@@ -88,7 +88,7 @@ func (p *Program) EventsRingbuf() *ebpf.Map {
 	return p.objs.EventsRingbuf
 }
 
-// DebugEvents 获取 Debug 事件 Ring Buffer
-func (p *Program) DebugEvents() *ebpf.Map {
-	return p.objs.DebugEvents
+// LogEvents 获取日志 Ring Buffer
+func (p *Program) LogEvents() *ebpf.Map {
+	return p.objs.LogEvents
 }

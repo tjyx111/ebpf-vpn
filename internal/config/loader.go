@@ -43,13 +43,11 @@ type TOMLConfig struct {
 		MTU         uint32 `toml:"mtu"`
 	} `toml:"network"`
 	Features struct {
-		UDPEchoEnabled     bool `toml:"udp_echo_enabled"`
-		NATEnabled         bool `toml:"nat_enabled"`
-		DebugPacketEnabled bool `toml:"debug_packet_enabled"` // 是否启用 debug_packet 功能
+		UDPEchoEnabled bool `toml:"udp_echo_enabled"`
+		NATEnabled     bool `toml:"nat_enabled"`
 	} `toml:"features"`
 	Tracing struct {
-		LogFlgDebugPkt bool `toml:"log_flg_debug_pkt"` // 调试数据包处理
-		LogFlgSnat     bool `toml:"log_flg_snat"`      // SNAT 处理日志
+		LogFlgSnat bool `toml:"log_flg_snat"` // SNAT 处理日志
 		LogFlgDnat     bool `toml:"log_flg_dnat"`      // DNAT 处理日志
 		LogFlgCfg      bool `toml:"log_flg_cfg"`       // 配置相关日志
 		LogFlgIcmp     bool `toml:"log_flg_icmp"`      // ICMP 处理日志
@@ -138,9 +136,6 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	// 从独立的布尔配置构建 log_flags 位掩码
 	// 使用与 C 端统一的命名规则：LOG_FLG_XXX
 	logFlags := uint32(0)
-	if tomlCfg.Tracing.LogFlgDebugPkt {
-		logFlags |= 1 << 0 // LOG_FLG_DEBUG_PKT
-	}
 	if tomlCfg.Tracing.LogFlgSnat {
 		logFlags |= 1 << 2 // LOG_FLG_SNAT
 	}
@@ -174,9 +169,6 @@ func convertToUnifiedConfig(tomlCfg *TOMLConfig) *UnifiedConfig {
 	}
 	if tomlCfg.Features.NATEnabled {
 		cfg.Flags |= 1 << 4 // CFG_FLAG_NAT_ENABLED
-	}
-	if tomlCfg.Features.DebugPacketEnabled {
-		cfg.Flags |= 1 << 6 // CFG_FLAG_DEBUG_ENABLED
 	}
 
 	// NAT 配置

@@ -80,14 +80,14 @@ func main() {
 		log.Println("Packet consumer started (PCAP disabled)")
 	}
 
-	// 启动 Debug Ring Buffer 消费者
-	debugConsumer, err := packet.NewDebugConsumer(program.DebugEvents(), logger)
+	// 启动日志消费者
+	logConsumer, err := packet.NewLogConsumer(program.LogEvents(), "logs")
 	if err != nil {
-		log.Printf("Failed to create debug consumer: %v", err)
+		log.Printf("Failed to create log consumer: %v", err)
 	} else {
-		debugConsumer.Start()
-		defer debugConsumer.Stop()
-		log.Println("Debug consumer started")
+		logConsumer.Start()
+		defer logConsumer.Stop()
+		log.Println("Log consumer started (logs directory: ./logs)")
 	}
 
 	// 启动配置热加载

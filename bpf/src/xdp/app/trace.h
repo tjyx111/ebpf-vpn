@@ -31,9 +31,9 @@ struct {
 struct trace_event {
     __u32 pkt_len;
     __u32 pkt_real_len;
-   __u8 packet_data[MAX_PACKET_SIZE];
+    __u8 packet_data[MAX_PACKET_SIZE];
     __u32 xdp_action;
-};
+} __attribute__((packed));
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);

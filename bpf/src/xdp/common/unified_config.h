@@ -6,7 +6,6 @@
 // 配置标志位定义
 #define CFG_FLAG_UDP_ECHO_ENABLED      (1 << 2)
 #define CFG_FLAG_NAT_ENABLED           (1 << 4)
-#define CFG_FLAG_DEBUG_ENABLED          (1 << 6)
 
 // 日志标志位定义（用于控制 bpf_trace_printk 输出）
 // 使用 32 位标志位，每一位代表一种日志类型
@@ -121,39 +120,12 @@ struct unified_config {
     __u8 reserved5[10];
 } __attribute__((packed));
 
-// Debug 事件结构体（通过 Ring Buffer 发送到用户空间）
-struct debug_event {
-    // 外层以太网头
-    __u8 outer_src_mac[6];
-    __u8 outer_dst_mac[6];
-
-    // 外层 IP
-    __u32 outer_src_ip;
-    __u32 outer_dst_ip;
-    __u8  outer_protocol;
-    __u16 outer_src_port;
-    __u16 outer_dst_port;
-
-    // VPN 头
-    __u8  vpn_first_byte;
-    __u8  vpn_next_proto;
-    __u16 vpn_flags;
-    __u32 vpn_session_id;
-
-    // 内层 IP
-    __u32 inner_src_ip;
-    __u32 inner_dst_ip;
-    __u8  inner_protocol;
-    __u16 inner_src_port;
-    __u16 inner_dst_port;
-
-    // 路由信息
-    __u32 fib_ifindex;        // 出接口索引
-    __u8  fib_src_mac[6];     // 源 MAC
-    __u8  fib_dst_mac[6];     // 目标 MAC (下一跳)
-    __s32 fib_result;         // FIB 查询结果
-
-    __u64 timestamp;
+// 日志事件结构体（通过 Ring Buffer 发送到用户空间）
+struct log_event {
+    __u32 log_flag;        // 日志标志位（对应 LOG_FLG_*）
+    __u16 data_len;        // 实际数据长度
+    __u16 reserved;
+    char log_data[1024];   // 日志数据（最多 1024 字节）
 } __attribute__((packed));
 
 #endif // UNIFIED_CONFIG_H

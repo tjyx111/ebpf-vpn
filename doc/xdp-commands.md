@@ -1,5 +1,10 @@
 # XDP 常用命令
 
+## 查看日志
+```bash
+cat /sys/kernel/debug/tracing/trace_pipe
+```
+
 ## 查看 XDP 程序状态
 
 ### 查看指定网卡上的 XDP 程序

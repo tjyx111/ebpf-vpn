@@ -5,47 +5,25 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 	"unsafe"
+
+	"ebpf-vpn/internal/logging"
+	"ebpf-vpn/internal/pcap"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
-	"ebpf-vpn/internal/logging"
-	"ebpf-vpn/internal/pcap"
 )
 
-// DebugEvent 对应 C 端的 debug_event 结构（packed，80字节）
-type DebugEvent struct {
-	// 外层以太网头
-	OuterSrcMac [6]byte
-	OuterDstMac [6]byte
-
-	// 外层 IP
-	OuterSrcIP     uint32
-	OuterDstIP     uint32
-	OuterProtocol  uint8
-	OuterSrcPort   uint16
-	OuterDstPort   uint16
-
-	// VPN 头
-	VpnFirstByte  uint8
-	VpnNextProto  uint8
-	VpnFlags      uint16
-	VpnSessionID  uint32
-
-	// 内层 IP
-	InnerSrcIP    uint32
-	InnerDstIP    uint32
-	InnerProtocol uint8
-	InnerSrcPort  uint16
-	InnerDstPort  uint16
-
-	// 路由信息
-	FibIfindex  uint32 // 出接口索引
-	FibSrcMac   [6]byte
-	FibDstMac   [6]byte
-	FibResult   int32
-
-	Timestamp uint64
+// LogEvent 对应 C 端的 log_event 结构
+type LogEvent struct {
+	LogFlag uint32
+	DataLen uint16
+	Reserved uint16
+	LogData [1024]byte
 }
 
 // TraceEvent 对应 C 端的 trace_event 结构
@@ -225,126 +203,6 @@ func xdpActionToString(action uint32) string {
 	}
 }
 
-// DebugConsumer Debug 事件 Ring Buffer 消费器
-type DebugConsumer struct {
-	reader *ringbuf.Reader
-	done   chan struct{}
-	logger *logging.Logger
-}
-
-// NewDebugConsumer 创建新的 Debug 消费者
-func NewDebugConsumer(ringbufMap *ebpf.Map, logger *logging.Logger) (*DebugConsumer, error) {
-	rd, err := ringbuf.NewReader(ringbufMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create debug ringbuf reader: %w", err)
-	}
-
-	return &DebugConsumer{
-		reader: rd,
-		done:   make(chan struct{}),
-		logger: logger,
-	}, nil
-}
-
-// Start 启动消费 goroutine
-func (c *DebugConsumer) Start() {
-	go c.consume()
-}
-
-// Stop 停止消费
-func (c *DebugConsumer) Stop() {
-	close(c.done)
-}
-
-// consume 消费 Debug Ring Buffer 事件
-func (c *DebugConsumer) consume() {
-	defer c.reader.Close()
-
-	// C 端实际大小（通过 unsafe.Sizeof 获取的 Go 大小可能与 C 端不一致）
-	const expectedSize = 74
-
-	for {
-		select {
-		case <-c.done:
-			log.Println("Stopping debug consumer...")
-			return
-		default:
-		}
-
-		// 读取事件
-		rec, err := c.reader.Read()
-		if err != nil {
-			if err == ringbuf.ErrClosed {
-				return
-			}
-			continue
-		}
-
-		// 解析事件
-		if len(rec.RawSample) < expectedSize {
-			continue
-		}
-
-		event := (*DebugEvent)(unsafe.Pointer(&rec.RawSample[0]))
-		c.logDebugEvent(event)
-	}
-}
-
-// logDebugEvent 格式化输出 Debug 事件
-func (c *DebugConsumer) logDebugEvent(event *DebugEvent) {
-	// 检查日志开关（对应 C 端的 LOG_DEBUG_PKG）
-	if !c.logger.DebugPkgEnabled() {
-		return
-	}
-	// 转换 MAC 地址为字符串
-	outerSrcMac := macToString(event.OuterSrcMac[:])
-	outerDstMac := macToString(event.OuterDstMac[:])
-	fibSrcMac := macToString(event.FibSrcMac[:])
-	fibDstMac := macToString(event.FibDstMac[:])
-
-	// 转换 IP 地址为字符串
-	outerSrcIP := intToIP(event.OuterSrcIP)
-	outerDstIP := intToIP(event.OuterDstIP)
-	innerSrcIP := intToIP(event.InnerSrcIP)
-	innerDstIP := intToIP(event.InnerDstIP)
-
-	// 协议类型
-	outerProto := protocolToString(event.OuterProtocol)
-	innerProto := protocolToString(event.InnerProtocol)
-
-	// FIB 结果
-	fibResult := fibResultToString(event.FibResult)
-
-	log.Printf("[DEBUG] ========== PACKET START ==========")
-	log.Printf("[DEBUG] Outer: %s -> %s | %s %s:%d -> %s:%d",
-		outerSrcMac, outerDstMac,
-		outerProto, outerSrcIP, event.OuterSrcPort, outerDstIP, event.OuterDstPort)
-
-	log.Printf("[DEBUG] VPN Header: magic=0x%02x, proto=%d, flags=0x%04x, session=%d",
-		event.VpnFirstByte, event.VpnNextProto, event.VpnFlags, event.VpnSessionID)
-
-	log.Printf("[DEBUG] Inner: %s %s:%d -> %s:%d",
-		innerProto, innerSrcIP, event.InnerSrcPort, innerDstIP, event.InnerDstPort)
-
-	log.Printf("[DEBUG] FIB Lookup: %s", fibResult)
-	if event.FibResult == 0 {
-		log.Printf("[DEBUG] FIB -> ifindex=%d, src_mac=%s, dst_mac=%s",
-			event.FibIfindex, fibSrcMac, fibDstMac)
-	}
-
-	log.Printf("[DEBUG] Timestamp: %d ns", event.Timestamp)
-	log.Printf("[DEBUG] ========== PACKET END ============\n")
-}
-
-// macToString 将 MAC 字节数组转换为字符串
-func macToString(mac []byte) string {
-	if len(mac) != 6 {
-		return "??"
-	}
-	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",
-		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
-}
-
 // intToIP 将 uint32 IP 地址转换为字符串
 func intToIP(ip uint32) string {
 	return fmt.Sprintf("%d.%d.%d.%d",
@@ -365,18 +223,185 @@ func protocolToString(proto uint8) string {
 	}
 }
 
-// fibResultToString 将 FIB 查询结果转换为字符串
-func fibResultToString(result int32) string {
-	switch result {
-	case 0:
-		return "SUCCESS"
-	case -1:
-		return "ERR_FAILED"
-	case -2:
-		return "ERR_NO_NEIGH"
-	case -3:
-		return "ERR_IPV6_DISABLED"
-	default:
-		return fmt.Sprintf("ERR(%d)", result)
+// LogConsumer 日志 Ring Buffer 消费器
+type LogConsumer struct {
+	reader     *ringbuf.Reader
+	done       chan struct{}
+	logFile    *os.File
+	logDir     string
+	mu         sync.Mutex
+}
+
+// NewLogConsumer 创建新的日志消费者
+func NewLogConsumer(ringbufMap *ebpf.Map, logDir string) (*LogConsumer, error) {
+	rd, err := ringbuf.NewReader(ringbufMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log ringbuf reader: %w", err)
 	}
+
+	// 创建日志目录
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		rd.Close()
+		return nil, fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	return &LogConsumer{
+		reader:  rd,
+		done:    make(chan struct{}),
+		logDir:  logDir,
+	}, nil
+}
+
+// Start 启动消费 goroutine
+func (c *LogConsumer) Start() {
+	go c.consume()
+}
+
+// Stop 停止消费
+func (c *LogConsumer) Stop() {
+	close(c.done)
+	if c.logFile != nil {
+		c.logFile.Close()
+	}
+}
+
+// consume 消费日志 Ring Buffer 事件
+func (c *LogConsumer) consume() {
+	defer c.reader.Close()
+
+	const unifiedLogFileName = "unified.log"
+
+	for {
+		select {
+		case <-c.done:
+			log.Println("Stopping log consumer...")
+			return
+		default:
+		}
+
+		// 读取事件
+		rec, err := c.reader.Read()
+		if err != nil {
+			if err == ringbuf.ErrClosed {
+				return
+			}
+			continue
+		}
+
+		// 解析事件
+		if len(rec.RawSample) < 8 { // 至少需要 log_flag + data_len
+			continue
+		}
+
+		event := (*LogEvent)(unsafe.Pointer(&rec.RawSample[0]))
+
+		// 写入统一日志文件，带 LogFlag 前缀
+		c.writeLog(unifiedLogFileName, event.LogFlag, event.LogData[:event.DataLen])
+	}
+}
+
+// logFlagToString 将日志标志位转换为字符串前缀
+func logFlagToString(logFlag uint32) string {
+	switch logFlag {
+	case 1 << 0:
+		return "[DEBUG_PKT]"
+	case 1 << 2:
+		return "[SNAT]"
+	case 1 << 3:
+		return "[DNAT]"
+	case 1 << 4:
+		return "[CFG]"
+	case 1 << 7:
+		return "[ICMP]"
+	default:
+		return fmt.Sprintf("[FLAG_%d]", logFlag)
+	}
+}
+
+// writeLog 写入日志到文件（带日志轮转）
+func (c *LogConsumer) writeLog(filename string, logFlag uint32, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	const maxLogSize = 100 * 1024 * 1024 // 100MB
+	const maxLogFiles = 5
+
+	// 关闭之前的文件（如果文件名改变）
+	if c.logFile != nil && filepath.Base(c.logFile.Name()) != filename {
+		c.logFile.Close()
+		c.logFile = nil
+	}
+
+	// 打开日志文件（如果还没打开）
+	if c.logFile == nil {
+		logPath := filepath.Join(c.logDir, filename)
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Printf("Failed to open log file %s: %v", logPath, err)
+			return
+		}
+		c.logFile = f
+	}
+
+	// 检查文件大小，如果超过限制则进行轮转
+	info, err := c.logFile.Stat()
+	if err == nil {
+		if info.Size() >= maxLogSize {
+			// 关闭当前文件
+			c.logFile.Close()
+			c.logFile = nil
+
+			// 执行日志轮转
+			c.rotateLog(filename, maxLogFiles, maxLogSize)
+		}
+	}
+
+	// 重新打开文件（轮转后）
+	if c.logFile == nil {
+		logPath := filepath.Join(c.logDir, filename)
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Printf("Failed to open log file %s after rotation: %v", logPath, err)
+			return
+		}
+		c.logFile = f
+	}
+
+	// 写入日志数据
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+	logPrefix := logFlagToString(logFlag)
+	logLine := fmt.Sprintf("[%s] %s %s\n", timestamp, logPrefix, string(data))
+
+	if _, err := c.logFile.WriteString(logLine); err != nil {
+		log.Printf("Failed to write log: %v", err)
+	}
+
+	// 立即刷新到磁盘
+	c.logFile.Sync()
+}
+
+// rotateLog 执行日志轮转
+func (c *LogConsumer) rotateLog(filename string, maxFiles int, maxLogSize int64) {
+	logPath := filepath.Join(c.logDir, filename)
+
+	// 删除最旧的日志文件（.5）
+	oldFile5 := logPath + ".5"
+	os.Remove(oldFile5)
+
+	// 重命名 .4 → .5
+	for i := maxFiles - 1; i >= 1; i-- {
+		oldFile := logPath + fmt.Sprintf(".%d", i)
+		newFile := logPath + fmt.Sprintf(".%d", i+1)
+
+		if err := os.Rename(oldFile, newFile); err != nil && !os.IsNotExist(err) {
+			log.Printf("Warning: failed to rotate log file %s: %v", oldFile, err)
+		}
+	}
+
+	// 重命名当前文件 → .1
+	if err := os.Rename(logPath, logPath+".1"); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to rotate log file %s: %v", logPath, err)
+	}
+
+	log.Printf("Log rotated: %s (max %d files, %dMB each)\n", filename, maxFiles, maxLogSize/(1024*1024))
 }
