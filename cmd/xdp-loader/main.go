@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ebpf-vpn/internal/config"
+	"ebpf-vpn/internal/pcap"
 	"ebpf-vpn/internal/stats"
 	"ebpf-vpn/internal/xdp"
 
@@ -18,10 +19,11 @@ import (
 )
 
 var (
-	ifaceName     = flag.String("iface", "eth0", "Network interface to attach XDP program")
+	ifaceName     = flag.String("iface", "eth0", "Network interface(s) to attach XDP program, comma-separated")
 	configPath    = flag.String("config", "config.toml", "Path to configuration file")
 	statusFile    = flag.String("status", "status.log", "Path to status log file")
 	statsInterval = flag.Duration("stats-interval", 5*time.Second, "Statistics reporting interval")
+	dnatPcapPath  = flag.String("dnat-pcap", "", "Path to write DNAT ICMP reply packets as pcap; disabled when empty")
 )
 
 func main() {
@@ -51,6 +53,16 @@ func main() {
 	statsReporter := stats.NewReporter(program, *statusFile, *statsInterval)
 	statsReporter.Start()
 	defer statsReporter.Stop()
+
+	if *dnatPcapPath != "" {
+		recorder, err := pcap.NewRecorder(program.DnatCaptureEvents(), *dnatPcapPath)
+		if err != nil {
+			log.Fatalf("Failed to start DNAT pcap recorder: %v", err)
+		}
+		recorder.Start()
+		defer recorder.Close()
+		log.Printf("DNAT pcap recorder is writing to %s", *dnatPcapPath)
+	}
 
 	log.Printf("XDP loader is running on %s. Press Ctrl+C to stop.", *ifaceName)
 

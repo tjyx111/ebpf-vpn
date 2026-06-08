@@ -8,7 +8,7 @@ Codex's standard project instruction filename is `AGENTS.md`. Keep the canonical
 
 Use this file as a compatibility summary for the current milestone.
 
-## Current ICMP SNAT Milestone
+## Current ICMP NAT Forwarding Precursor
 
 The current working config is:
 
@@ -34,6 +34,8 @@ Validated result:
 - Egress interface selected by FIB: `enp0s17`.
 - Egress IP: `192.168.75.191`.
 - Windows Wireshark captured the SNATed ICMP packet.
+- DNAT return packets are re-encapsulated as UDP/VPN replies to the VPN client.
+- `dnat-icmp-reply.pcap` captures the re-encapsulated DNAT packet for Wireshark.
 
 Capture artifact:
 
@@ -51,15 +53,19 @@ Implemented:
 - Recalculate IPv4 checksum.
 - Run `bpf_fib_lookup()`.
 - Send through `bpf_redirect()`.
+- Match ICMP echo replies by egress IP, remote IP, and ICMP ID.
+- Rewrite reply destination back to original inner source IP.
+- Re-encapsulate reply as outer IPv4/UDP/VPN.
+- Send the re-encapsulated reply to the original VPN client via the recorded ingress interface.
+- Write DNAT return packets to pcap with `-dnat-pcap`.
 
 Not implemented yet:
 
-- DNAT return path.
 - Session map.
 - ICMP ID translation.
 - TCP/UDP NAT.
 - Port allocation.
-- Reply encapsulation back to the VPN client.
+- Timeout cleanup.
 
 ## Verification Counters
 
@@ -71,10 +77,17 @@ Successful ICMP SNAT should increase:
 "STAT_VPN_ICMP_SNAT_COUNT"
 ```
 
+Successful ICMP DNAT return encapsulation should increase:
+
+```json
+"STAT_VPN_ICMP_DNAT_COUNT"
+```
+
 Successful path should not increase:
 
 ```json
 "STAT_VPN_FIB_LOOKUP_ERROR_COUNT"
+"STAT_VPN_DNAT_FIB_LOOKUP_ERROR_COUNT"
 "STAT_VPN_ADJUST_HEAD_ERROR_COUNT"
 "STAT_VPN_NEW_ETH_ERROR_COUNT"
 "STAT_VPN_NEW_IP_ERROR_COUNT"

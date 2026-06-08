@@ -3,6 +3,7 @@ package xdp
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"ebpf-vpn/internal/bpf"
 	"github.com/cilium/ebpf"
@@ -13,19 +14,12 @@ import (
 // Program XDP 程序管理器
 type Program struct {
 	objs     *bpf.BpfObjects
-	link     link.Link
-	ifaceIdx int
+	links    []link.Link
+	ifaceIdx []int
 }
 
-// Load 加载 XDP 程序到指定网卡
-func Load(ifaceName string) (*Program, error) {
-	// 查找网卡
-	iface, err := netlink.LinkByName(ifaceName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find interface %s: %w", ifaceName, err)
-	}
-
-	// 加载 eBPF 程序
+// Load 加载 XDP 程序到一个或多个网卡，ifaceNames 使用逗号分隔。
+func Load(ifaceNames string) (*Program, error) {
 	objs := &bpf.BpfObjects{}
 	if err := bpf.LoadBpfObjects(objs, &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
@@ -35,34 +29,51 @@ func Load(ifaceName string) (*Program, error) {
 		return nil, fmt.Errorf("failed to load BPF objects: %w", err)
 	}
 
-	// 附加 XDP 程序到网卡
-	l, err := link.AttachXDP(link.XDPOptions{
-		Program:   objs.XdpGateway,
-		Interface: iface.Attrs().Index,
-	})
-	if err != nil {
-		objs.Close()
-		return nil, fmt.Errorf("failed to attach XDP program: %w", err)
+	program := &Program{objs: objs}
+	for _, ifaceName := range strings.Split(ifaceNames, ",") {
+		ifaceName = strings.TrimSpace(ifaceName)
+		if ifaceName == "" {
+			continue
+		}
+
+		iface, err := netlink.LinkByName(ifaceName)
+		if err != nil {
+			program.Close()
+			return nil, fmt.Errorf("failed to find interface %s: %w", ifaceName, err)
+		}
+
+		l, err := link.AttachXDP(link.XDPOptions{
+			Program:   objs.XdpGateway,
+			Interface: iface.Attrs().Index,
+		})
+		if err != nil {
+			program.Close()
+			return nil, fmt.Errorf("failed to attach XDP program to %s: %w", ifaceName, err)
+		}
+
+		program.links = append(program.links, l)
+		program.ifaceIdx = append(program.ifaceIdx, iface.Attrs().Index)
+		log.Printf("XDP program loaded on interface %s (index: %d)", ifaceName, iface.Attrs().Index)
 	}
 
-	log.Printf("XDP program loaded on interface %s (index: %d)", ifaceName, iface.Attrs().Index)
+	if len(program.links) == 0 {
+		program.Close()
+		return nil, fmt.Errorf("no valid interfaces provided")
+	}
 
-	return &Program{
-		objs:     objs,
-		link:     l,
-		ifaceIdx: iface.Attrs().Index,
-	}, nil
+	return program, nil
 }
 
 // Close 卸载 XDP 程序
 func (p *Program) Close() error {
 	log.Println("Unloading XDP program...")
 
-	if p.link != nil {
-		if err := p.link.Close(); err != nil {
+	for _, l := range p.links {
+		if err := l.Close(); err != nil {
 			log.Printf("Warning: failed to detach XDP program: %v", err)
 		}
 	}
+	p.links = nil
 
 	if p.objs != nil {
 		if err := p.objs.Close(); err != nil {
@@ -76,6 +87,11 @@ func (p *Program) Close() error {
 // UnifiedConfigMap 获取统一配置 Map
 func (p *Program) UnifiedConfigMap() *ebpf.Map {
 	return p.objs.UnifiedConfigMap
+}
+
+// DnatCaptureEvents 获取 DNAT 回包抓包 ringbuf。
+func (p *Program) DnatCaptureEvents() *ebpf.Map {
+	return p.objs.DnatCaptureEvents
 }
 
 // ReadStatCounters 读取统计计数器全局变量（实现 stats.StatsReader 接口）

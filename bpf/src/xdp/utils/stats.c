@@ -22,6 +22,12 @@ static __always_inline int inc_pkt_stats(STATS_TYPE_T type)
         case STATS_TYPE_VPN_ICMP_SNAT:
             index = STAT_VPN_ICMP_SNAT_COUNT;
             break;
+        case STATS_TYPE_VPN_ICMP_DNAT:
+            index = STAT_VPN_ICMP_DNAT_COUNT;
+            break;
+        case STATS_TYPE_VPN_ICMP_DNAT_MISS:
+            index = STAT_VPN_ICMP_DNAT_MISS_COUNT;
+            break;
         case STATS_TYPE_XDP_PASS:
             index = STAT_XDP_PASS_COUNT;
             break;
@@ -54,6 +60,9 @@ static __always_inline int inc_pkt_stats(STATS_TYPE_T type)
             break;
         case STATS_TYPE_VPN_FIB_LOOKUP_ERROR:
             index = STAT_VPN_FIB_LOOKUP_ERROR_COUNT;
+            break;
+        case STATS_TYPE_VPN_DNAT_FIB_LOOKUP_ERROR:
+            index = STAT_VPN_DNAT_FIB_LOOKUP_ERROR_COUNT;
             break;
     }
 

@@ -61,7 +61,9 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	UnifiedConfigMap *ebpf.MapSpec `ebpf:"unified_config_map"`
+	DnatCaptureEvents *ebpf.MapSpec `ebpf:"dnat_capture_events"`
+	IcmpDnatMap       *ebpf.MapSpec `ebpf:"icmp_dnat_map"`
+	UnifiedConfigMap  *ebpf.MapSpec `ebpf:"unified_config_map"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
@@ -91,11 +93,15 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	UnifiedConfigMap *ebpf.Map `ebpf:"unified_config_map"`
+	DnatCaptureEvents *ebpf.Map `ebpf:"dnat_capture_events"`
+	IcmpDnatMap       *ebpf.Map `ebpf:"icmp_dnat_map"`
+	UnifiedConfigMap  *ebpf.Map `ebpf:"unified_config_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
+		m.DnatCaptureEvents,
+		m.IcmpDnatMap,
 		m.UnifiedConfigMap,
 	)
 }

@@ -8,7 +8,7 @@ Codex should treat this file as the durable project instruction source. Keep it 
 
 ## Current Milestone
 
-ICMP IP SNAT is validated.
+ICMP NAT forwarding precursor is validated.
 
 Known-good runtime config:
 
@@ -33,6 +33,8 @@ Validated path:
 - Egress interface selected by FIB: `enp0s17`
 - Egress IP: `192.168.75.191`
 - Windows Wireshark captured the SNATed ICMP packet.
+- DNAT return packets are re-encapsulated as UDP/VPN replies to the VPN client.
+- `dnat-icmp-reply.pcap` captures DNAT packets after re-encapsulation.
 - Capture artifact currently present: `./icmpSnat.pcapng`
 
 ## Architecture
@@ -50,8 +52,12 @@ Validated path:
 
 - `internal/xdp/program.go`
   - Loads generated BPF objects.
-  - Attaches `xdp_gateway`.
+  - Attaches `xdp_gateway` to one or more comma-separated interfaces.
   - Reads `stat_counters`.
+
+- `internal/pcap`
+  - Reads DNAT capture ringbuf events.
+  - Writes Ethernet pcap files for Wireshark inspection.
 
 - `internal/stats/forward_stats.go`
   - Converts BPF counters to status JSON.
@@ -59,7 +65,8 @@ Validated path:
 - `bpf/src/main.c`
   - XDP entrypoint.
   - UDP echo path.
-  - VPN ICMP IP-SNAT path.
+  - VPN ICMP SNAT path.
+  - ICMP DNAT return encapsulation path.
 
 - `bpf/src/xdp/common/unified_config.h`
   - Shared BPF config layout.
@@ -83,18 +90,25 @@ Validated path:
   - Recalculate IPv4 checksum.
   - Use `bpf_fib_lookup()`.
   - Send with `bpf_redirect()`.
+- ICMP echo-reply DNAT:
+  - Match replies by egress IP, remote IP, and ICMP ID.
+  - Rewrite inner destination IP back to the original inner source IP.
+  - Re-encapsulate as outer IPv4/UDP/VPN.
+  - Send back to the original VPN client via the recorded ingress interface.
+- DNAT pcap capture:
+  - `-dnat-pcap=<path>` writes re-encapsulated DNAT packets to pcap.
+  - `./run.sh` writes `dnat-icmp-reply.pcap`.
 
 ## Not Implemented Yet
 
-- DNAT return path.
 - Session map.
 - ICMP ID translation.
 - TCP/UDP NAT.
 - Port allocation.
 - Timeout cleanup.
-- Reply encapsulation back to VPN clients.
 
-Do not claim VPN round trip is complete until DNAT and return encapsulation are implemented.
+Do not claim general NAT forwarding is complete until TCP/UDP NAT, port allocation,
+and timeout cleanup are implemented.
 
 ## Required Commands
 
@@ -148,10 +162,17 @@ Successful ICMP SNAT should increase:
 "STAT_VPN_ICMP_SNAT_COUNT"
 ```
 
+Successful ICMP DNAT return encapsulation should increase:
+
+```json
+"STAT_VPN_ICMP_DNAT_COUNT"
+```
+
 Successful ICMP SNAT should not increase:
 
 ```json
 "STAT_VPN_FIB_LOOKUP_ERROR_COUNT"
+"STAT_VPN_DNAT_FIB_LOOKUP_ERROR_COUNT"
 "STAT_VPN_ADJUST_HEAD_ERROR_COUNT"
 "STAT_VPN_NEW_ETH_ERROR_COUNT"
 "STAT_VPN_NEW_IP_ERROR_COUNT"
