@@ -3,15 +3,7 @@
 
 #include <linux/types.h>
 #include <xdp/utils/csum.h>
-#include <xdp/common/unified_config.h>
-
-#define MTU 1500
-
-static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, struct udphdr *udp, void *data_end, struct unified_config *cfg) {
-    if (cfg->log_flags & LOG_FLG_DEBUG_PKT) {
-        bpf_trace_printk("UDP Echo enter", sizeof("UDP Echo enter"));
-    }
-
+static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, struct udphdr *udp, void *data_end) {
     if (eth == NULL || ip == NULL || udp == NULL) {
         return XDP_PASS;
     }
@@ -34,8 +26,6 @@ static __always_inline int xdp_udpecho(struct ethhdr *eth, struct iphdr *ip, str
     __u16 old_dst_port = udp->dest;
     udp->source = old_dst_port;
     udp->dest = old_src_port;
-    
-    // Recalculate checksum.
     udp->check = csum_diff4(old_dst_ip, ip->daddr, udp->check);
     udp->check = csum_diff4(old_src_ip, ip->saddr, udp->check);
 

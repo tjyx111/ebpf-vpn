@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log"
 
+	"ebpf-vpn/internal/bpf"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/vishvananda/netlink"
-	"ebpf-vpn/internal/bpf"
 )
 
 // Program XDP 程序管理器
@@ -78,17 +78,15 @@ func (p *Program) UnifiedConfigMap() *ebpf.Map {
 	return p.objs.UnifiedConfigMap
 }
 
-// CaptureRuleMap 获取抓包规则 Map
-func (p *Program) CaptureRuleMap() *ebpf.Map {
-	return p.objs.CaptureRuleMap
-}
+// ReadStatCounters 读取统计计数器全局变量（实现 stats.StatsReader 接口）
+func (p *Program) ReadStatCounters() ([256]uint64, error) {
+	var counters [256]uint64
 
-// EventsRingbuf 获取事件 Ring Buffer
-func (p *Program) EventsRingbuf() *ebpf.Map {
-	return p.objs.EventsRingbuf
-}
+	// 从 BPF 全局变量读取
+	// 使用 Get 方法读取全局变量的值
+	if err := p.objs.StatCounters.Get(&counters); err != nil {
+		return [256]uint64{}, fmt.Errorf("failed to read stat_counters: %w", err)
+	}
 
-// LogEvents 获取日志 Ring Buffer
-func (p *Program) LogEvents() *ebpf.Map {
-	return p.objs.LogEvents
+	return counters, nil
 }

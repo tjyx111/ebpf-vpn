@@ -17,3 +17,6 @@ type BpfMaps = bpfMaps
 
 // BpfPrograms contains all programs after they have been loaded into the kernel.
 type BpfPrograms = bpfPrograms
+
+// BpfVariables contains all variables after they have been loaded into the kernel.
+type BpfVariables = bpfVariables

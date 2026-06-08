@@ -5,11 +5,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"ebpf-vpn/internal/config"
-	"ebpf-vpn/internal/logging"
-	"ebpf-vpn/internal/packet"
+	"ebpf-vpn/internal/stats"
 	"ebpf-vpn/internal/xdp"
 
 	"github.com/cilium/ebpf"
@@ -17,87 +18,42 @@ import (
 )
 
 var (
-	ifaceName  = flag.String("iface", "eth0", "Network interface to attach XDP program")
-	configPath = flag.String("config", "config.toml", "Path to configuration file")
-	pcapFile   = flag.String("pcap", "", "Path to PCAP file for packet capture (empty to disable)")
+	ifaceName     = flag.String("iface", "eth0", "Network interface to attach XDP program")
+	configPath    = flag.String("config", "config.toml", "Path to configuration file")
+	statusFile    = flag.String("status", "status.log", "Path to status log file")
+	statsInterval = flag.Duration("stats-interval", 5*time.Second, "Statistics reporting interval")
 )
 
 func main() {
 	flag.Parse()
-
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	log.Printf("Starting XDP loader on interface %s...", *ifaceName)
-	log.Printf("Using config file: %s", *configPath)
-
-	// 加载初始配置
 	cfg, err := config.LoadFromFile(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config: UDP echo port=%d, MTU=%d, Flags=0x%02x, Debug packet=%v, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
-		cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags,
-		cfg.UnifiedConfig.Flags&(1<<6) != 0, // Debug packet enabled
-		cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
 
-	// 加载 XDP 程序
 	program, err := xdp.Load(*ifaceName)
 	if err != nil {
 		log.Fatalf("Failed to load XDP program: %v", err)
 	}
 	defer program.Close()
 
-	// 同步统一配置到 eBPF Map
 	if err := cfg.UnifiedConfig.SyncToMap(program.UnifiedConfigMap()); err != nil {
-		log.Fatalf("Failed to sync config to map: %v", err)
+		log.Fatalf("Failed to sync config: %v", err)
 	}
-	log.Println("Config synced to eBPF map")
+	logConfig("Loaded config", cfg)
 
-	// 同步抓包规则到 eBPF Map
-	if err := cfg.SyncCaptureRulesToMap(program.CaptureRuleMap()); err != nil {
-		log.Fatalf("Failed to sync capture rules to map: %v", err)
-	}
-	log.Printf("Synced %d capture rules to eBPF map", len(cfg.CaptureRules))
-
-	// 创建日志记录器
-	logger := logging.NewLogger(cfg.UnifiedConfig.LogFlags)
-
-	// 启动 Ring Buffer 消费者
-	// 只有当配置文件中启用抓包且指定了 pcap 文件时才写入 pcap 文件
-	pcapFilePath := ""
-	if cfg.UnifiedConfig.CaptureEnabled == 1 && *pcapFile != "" {
-		pcapFilePath = *pcapFile
-	}
-	consumer, err := packet.NewConsumer(program.EventsRingbuf(), logger, pcapFilePath)
-	if err != nil {
-		log.Fatalf("Failed to create packet consumer: %v", err)
-	}
-	consumer.Start()
-	defer consumer.Stop()
-	if pcapFilePath != "" {
-		log.Printf("Packet consumer started (PCAP: %s)", pcapFilePath)
-	} else {
-		log.Println("Packet consumer started (PCAP disabled)")
-	}
-
-	// 启动日志消费者
-	logConsumer, err := packet.NewLogConsumer(program.LogEvents(), "logs")
-	if err != nil {
-		log.Printf("Failed to create log consumer: %v", err)
-	} else {
-		logConsumer.Start()
-		defer logConsumer.Stop()
-		log.Println("Log consumer started (logs directory: ./logs)")
-	}
-
-	// 启动配置热加载
 	stopWatcher := make(chan struct{})
-	go watchConfig(*configPath, program.UnifiedConfigMap(), program.CaptureRuleMap(), stopWatcher)
+	go watchConfig(*configPath, program.UnifiedConfigMap(), stopWatcher)
 	defer close(stopWatcher)
 
-	log.Println("XDP loader is running. Press Ctrl+C to stop...")
+	statsReporter := stats.NewReporter(program, *statusFile, *statsInterval)
+	statsReporter.Start()
+	defer statsReporter.Stop()
 
-	// 等待信号
+	log.Printf("XDP loader is running on %s. Press Ctrl+C to stop.", *ifaceName)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
@@ -105,8 +61,13 @@ func main() {
 	log.Println("Shutting down...")
 }
 
-// watchConfig 监听配置文件变化并热加载
-func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, stop chan struct{}) {
+func watchConfig(path string, configMap *ebpf.Map, stop chan struct{}) {
+	configPath, err := filepath.Abs(path)
+	if err != nil {
+		log.Printf("Failed to resolve config path: %v", err)
+		return
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("Failed to create config watcher: %v", err)
@@ -114,54 +75,48 @@ func watchConfig(path string, configMap *ebpf.Map, captureRuleMap *ebpf.Map, sto
 	}
 	defer watcher.Close()
 
-	if err := watcher.Add(path); err != nil {
+	if err := watcher.Add(filepath.Dir(configPath)); err != nil {
 		log.Printf("Failed to watch config file: %v", err)
 		return
 	}
 
-	log.Println("Config watcher started")
-
 	for {
 		select {
 		case <-stop:
-			log.Println("Stopping config watcher...")
 			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
-
-			// 只处理写入事件
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Printf("Config file changed, reloading: %s", event.Name)
-
-				cfg, err := config.LoadFromFile(path)
-				if err != nil {
-					log.Printf("Failed to reload config: %v", err)
-					continue
-				}
-
-				if err := cfg.UnifiedConfig.SyncToMap(configMap); err != nil {
-					log.Printf("Failed to sync new config: %v", err)
-					continue
-				}
-
-				if err := cfg.SyncCaptureRulesToMap(captureRuleMap); err != nil {
-					log.Printf("Failed to sync capture rules: %v", err)
-					continue
-				}
-
-				log.Printf("Config reloaded: UDP echo port=%d, MTU=%d, Flags=0x%02x, Debug packet=%v, Capture enabled=%d, Dump pkg flags=0x%02x, Capture rules=%d, LogFlags=0x%02x",
-					cfg.UnifiedConfig.UDPEchoPort, cfg.UnifiedConfig.MTU, cfg.UnifiedConfig.Flags,
-					cfg.UnifiedConfig.Flags&(1<<6) != 0, // Debug packet enabled
-					cfg.UnifiedConfig.CaptureEnabled, cfg.UnifiedConfig.DumpPkgFlags, len(cfg.CaptureRules), cfg.UnifiedConfig.LogFlags)
+			if filepath.Clean(event.Name) != configPath {
+				continue
 			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Chmod) == 0 {
+				continue
+			}
+			time.Sleep(50 * time.Millisecond)
 
+			cfg, err := config.LoadFromFile(configPath)
+			if err != nil {
+				log.Printf("Failed to reload config: %v", err)
+				continue
+			}
+			if err := cfg.UnifiedConfig.SyncToMap(configMap); err != nil {
+				log.Printf("Failed to sync config: %v", err)
+				continue
+			}
+			logConfig("Reloaded config", cfg)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
-			log.Printf("Watcher error: %v", err)
+			log.Printf("Config watcher error: %v", err)
 		}
 	}
+}
+
+func logConfig(prefix string, cfg *config.Config) {
+	uc := cfg.UnifiedConfig
+	log.Printf("%s: udp_echo_port=%d, vpn_port=%d, mtu=%d, flags=0x%02x, egress_ips=%d",
+		prefix, uc.UDPEchoPort, uc.VPNPort, uc.MTU, uc.Flags, uc.EgressIPCount)
 }

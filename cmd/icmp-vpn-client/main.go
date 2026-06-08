@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -9,11 +10,9 @@ import (
 )
 
 const (
-	VPNPort       = 18080
 	VPNMagicValue = 0x90
 	VPNProtoIPv4  = 1
 	VPNHeaderSize = 8
-	SessionID     = 12345
 )
 
 // VPNHeader VPN 头部结构
@@ -25,68 +24,110 @@ type VPNHeader struct {
 }
 
 func main() {
+	// 命令行参数
+	vpnServer := flag.String("vpn-server", "127.0.0.1:18080", "VPN 服务器地址 (IP:Port)")
+	targetIP := flag.String("target", "8.8.8.8", "目标 IP 地址")
+	sourceIP := flag.String("source", "192.168.1.100", "源 IP 地址 (内层 IP)")
+	sessionID := flag.Uint("session-id", 12345, "Session ID")
+	timeout := flag.Duration("timeout", 5*time.Second, "等待响应的超时时间")
+	count := flag.Int("count", 1, "发送包的数量 (0 表示持续发送)")
+	interval := flag.Duration("interval", 1*time.Second, "发送间隔")
+
+	flag.Parse()
+
 	fmt.Println("=== ICMP VPN 测试客户端 ===")
-	fmt.Println("发送目标: 8.8.8.8")
-	fmt.Println("VPN 服务器: 127.0.0.1:18080")
-	fmt.Println("Session ID:", SessionID)
+	fmt.Printf("发送目标: %s\n", *targetIP)
+	fmt.Printf("源地址: %s\n", *sourceIP)
+	fmt.Printf("VPN 服务器: %s\n", *vpnServer)
+	fmt.Printf("Session ID: %d\n", *sessionID)
+	fmt.Printf("发送数量: %d\n", *count)
+	if *count > 1 || *count == 0 {
+		fmt.Printf("发送间隔: %v\n", *interval)
+	}
 	fmt.Println()
 
-	// 创建 UDP 连接到本地 lo 接口
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:18080")
+	// 解析 VPN 服务器地址
+	vpnAddr, err := net.ResolveUDPAddr("udp", *vpnServer)
 	if err != nil {
-		log.Fatalf("解析地址失败: %v", err)
+		log.Fatalf("解析 VPN 服务器地址失败: %v", err)
 	}
 
-	conn, err := net.DialUDP("udp", nil, addr)
+	// 创建 UDP 连接
+	conn, err := net.DialUDP("udp", nil, vpnAddr)
 	if err != nil {
 		log.Fatalf("创建 UDP 连接失败: %v", err)
 	}
 	defer conn.Close()
 
-	fmt.Println("UDP 连接已建立:", conn.LocalAddr().String(), "->", conn.RemoteAddr().String())
+	fmt.Printf("UDP 连接已建立: %s -> %s\n", conn.LocalAddr().String(), conn.RemoteAddr().String())
 	fmt.Println()
 
-	// 创建 ICMP Echo Request 包（目标 8.8.8.8）
-	icmpPacket := createICMPPacket("8.8.8.8")
-	fmt.Printf("ICMP 包创建成功 (%d bytes)\n", len(icmpPacket))
-	printPacket(icmpPacket, "  ")
-	fmt.Println()
+	// 发送 ICMP 包
+	for i := 0; *count == 0 || i < *count; i++ {
+		if i > 0 {
+			time.Sleep(*interval)
+		}
 
-	// 封装到 VPN
-	vpnPacket := encapsulateVPN(icmpPacket, SessionID)
-	fmt.Printf("VPN 封装后 (%d bytes)\n", len(vpnPacket))
-	printPacket(vpnPacket[:min(64, len(vpnPacket))], "  ")
-	fmt.Println()
+		// 创建 ICMP Echo Request 包
+		sequence := uint16(i + 1)
+		icmpPacket := createICMPPacket(*sourceIP, *targetIP, sequence)
+		fmt.Printf("[%d] ICMP 包创建成功 (%d bytes)\n", i+1, len(icmpPacket))
+		if *count == 1 || i == 0 {
+			printPacket(icmpPacket, "  ")
+			fmt.Println()
+		}
 
-	// 发送数据包
-	fmt.Printf("发送 VPN 包到 %s...\n", conn.RemoteAddr().String())
-	_, err = conn.Write(vpnPacket)
-	if err != nil {
-		log.Fatalf("发送失败: %v", err)
-	}
-	fmt.Println("发送成功！")
-	fmt.Println()
+		// 封装到 VPN
+		vpnPacket := encapsulateVPN(icmpPacket, uint32(*sessionID))
+		fmt.Printf("[%d] VPN 封装后 (%d bytes)\n", i+1, len(vpnPacket))
+		if *count == 1 || i == 0 {
+			printPacket(vpnPacket[:min(64, len(vpnPacket))], "  ")
+			fmt.Println()
+		}
 
-	// 等待响应
-	fmt.Println("等待响应...")
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	buf := make([]byte, 1500)
-	n, err := conn.Read(buf)
-	if err != nil {
-		log.Printf("读取响应失败: %v", err)
+		// 发送数据包
+		fmt.Printf("[%d] 发送 VPN 包到 %s...\n", i+1, conn.RemoteAddr().String())
+		_, err = conn.Write(vpnPacket)
+		if err != nil {
+			log.Fatalf("发送失败: %v", err)
+		}
+		fmt.Printf("[%d] 发送成功！\n", i+1)
 		fmt.Println()
-		fmt.Println("注意: 如果 XDP 程序正确处理了 SNAT，应该能看到相关日志输出")
-		fmt.Println("请检查 'sudo cat /sys/kernel/debug/tracing/trace_pipe' 的输出")
-		return
-	}
 
-	fmt.Printf("收到响应 (%d bytes)\n", n)
-	printPacket(buf[:min(64, n)], "  ")
+		// 等待响应
+		fmt.Printf("[%d] 等待响应...\n", i+1)
+		conn.SetReadDeadline(time.Now().Add(*timeout))
+
+		buf := make([]byte, 1500)
+		n, err := conn.Read(buf)
+		if err != nil {
+			log.Printf("[%d] 读取响应失败: %v", i+1, err)
+			fmt.Println()
+			fmt.Println("注意: 请检查 XDP loader 的输出和 status.log 中的 VPN 统计")
+			continue
+		}
+
+		fmt.Printf("[%d] 收到响应 (%d bytes)\n", i+1, n)
+		printPacket(buf[:min(64, n)], "  ")
+		fmt.Println()
+	}
 }
 
 // createICMPPacket 创建 ICMP Echo Request 包
-func createICMPPacket(dstIP string) []byte {
+func createICMPPacket(srcIP, dstIP string, sequence uint16) []byte {
+	// 解析 IP 地址
+	srcIPAddr := net.ParseIP(srcIP)
+	dstIPAddr := net.ParseIP(dstIP)
+	if srcIPAddr == nil {
+		log.Fatalf("无效的源 IP 地址: %s", srcIP)
+	}
+	if dstIPAddr == nil {
+		log.Fatalf("无效的目标 IP 地址: %s", dstIP)
+	}
+
+	srcIPAddr = srcIPAddr.To4()
+	dstIPAddr = dstIPAddr.To4()
+
 	// IP 头部 (20 bytes)
 	ipHeader := make([]byte, 20)
 
@@ -97,7 +138,7 @@ func createICMPPacket(dstIP string) []byte {
 	// Total Length (稍后计算)
 	binary.BigEndian.PutUint16(ipHeader[2:4], 0)
 	// ID
-	binary.BigEndian.PutUint16(ipHeader[4:6], 12345)
+	binary.BigEndian.PutUint16(ipHeader[4:6], uint16(sequence))
 	// Flags/Fragment
 	ipHeader[6] = 0x40
 	ipHeader[7] = 0x00
@@ -109,17 +150,11 @@ func createICMPPacket(dstIP string) []byte {
 	ipHeader[10] = 0x00
 	ipHeader[11] = 0x00
 
-	// Source IP (127.0.0.1)
-	ipHeader[12] = 127
-	ipHeader[13] = 0
-	ipHeader[14] = 0
-	ipHeader[15] = 1
+	// Source IP
+	copy(ipHeader[12:16], srcIPAddr)
 
-	// Destination IP (8.8.8.8)
-	ipHeader[16] = 8
-	ipHeader[17] = 8
-	ipHeader[18] = 8
-	ipHeader[19] = 8
+	// Destination IP
+	copy(ipHeader[16:20], dstIPAddr)
 
 	// ICMP Header (8 bytes) + Data
 	icmpHeader := make([]byte, 8+12) // 8 bytes header + 12 bytes data
@@ -134,7 +169,7 @@ func createICMPPacket(dstIP string) []byte {
 	// ID
 	binary.BigEndian.PutUint16(icmpHeader[4:6], 1)
 	// Sequence
-	binary.BigEndian.PutUint16(icmpHeader[6:8], 1)
+	binary.BigEndian.PutUint16(icmpHeader[6:8], sequence)
 
 	// Data (payload)
 	data := []byte("Hello ICMP!")

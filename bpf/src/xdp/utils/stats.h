@@ -1,22 +1,27 @@
 #pragma once
 
- 
-
 #include <linux/bpf.h>
+#include <xdp/common/unified_config.h>
 
-#include <xdp/xdp_helpers.h>
-#include <xdp/prog_dispatcher.h>
-
-enum STATS_TYPE
-{
-    STATS_TYPE_FORWARDED = 0,
-    STATS_TYPE_PASSED,
-    STATS_TYPE_DROPPED
+enum STATS_TYPE {
+    STATS_TYPE_TOTAL_PACKETS,
+    STATS_TYPE_UDP_ECHO,
+    STATS_TYPE_VPN,
+    STATS_TYPE_VPN_ICMP_ECHO,
+    STATS_TYPE_VPN_ICMP_SNAT,
+    STATS_TYPE_XDP_PASS,
+    STATS_TYPE_UDP_HEADER_ERROR,
+    STATS_TYPE_VPN_HEADER_ERROR,
+    STATS_TYPE_VPN_INNER_IP_ERROR,
+    STATS_TYPE_VPN_NON_ICMP,
+    STATS_TYPE_VPN_INNER_ICMP_ERROR,
+    STATS_TYPE_VPN_NO_EGRESS_IP,
+    STATS_TYPE_VPN_ADJUST_HEAD_ERROR,
+    STATS_TYPE_VPN_NEW_ETH_ERROR,
+    STATS_TYPE_VPN_NEW_IP_ERROR,
+    STATS_TYPE_VPN_FIB_LOOKUP_ERROR,
 } typedef STATS_TYPE_T;
 
-static __always_inline int inc_pkt_stats(stats_t* stats, STATS_TYPE_T type);
+static __always_inline int inc_pkt_stats(STATS_TYPE_T type);
 
-// The source file is included directly below instead of compiled and linked as an object because when linking, there is no guarantee the compiler will inline the function (which is crucial for performance).
-// I'd prefer not to include the function logic inside of the header file.
-// More Info: https://stackoverflow.com/questions/24289599/always-inline-does-not-work-when-function-is-implemented-in-different-file
 #include "stats.c"

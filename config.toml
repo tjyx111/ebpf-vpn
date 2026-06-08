@@ -4,61 +4,7 @@ mtu = 1500
 
 [features]
 udp_echo_enabled = true
-nat_enabled = true
 
-[tracing]
-# 日志标志位配置（使用 log_flg_ 前缀，与 C 代码保持统一）
-# 所有标志位都是布尔值，true = 启用，false = 禁用
-log_flg_snat = false            # SNAT 处理日志
-log_flg_dnat = false            # DNAT 处理日志
-log_flg_cfg = false             # 配置信息日志
-log_flg_icmp = true             # ICMP 处理日志（启用 VPN ICMP 调试）
-
-# 抓包配置
-[capture]
-enabled = true           # 是否开启抓包功能
-dump_pkg_flags = 1      # 抓包标志位（1=在 XDP 入口抓原始包）
-
-# 抓包规则配置
-# 支持多条规则，只要匹配任一规则就会抓包
-# 如果没有任何规则，则抓取所有数据包
-
-[[capture_rules]]
-name = "udp echo input"
-src_port = 28080
-protocol = "udp"
-
-[[capture_rules]]
-name = "udp echo output"
-dst_port = 28080
-protocol = "udp"
-
-[[capture_rules]]
-name = "all icmp"
-protocol = "icmp"
-
-[[capture_rules]]
-name = "vpn traffic port 18080"
-dst_port = 18080
-protocol = "udp"   
-
-# NAT 配置
-[nat]
-vpn_server_ip = "192.168.1.1"      # VPN 服务器 IP
-vpn_port = 18080               # VPN 端口
-port_start = 10000             # 端口范围起始
-port_end = 65535               # 端口范围结束
-reserved_ports = [18080, 28080, 22, 80, 443, 3389]  # 预留端口
-timeout = 60                    # 超时时间（秒）
-
-# 网卡映射配置
-ingress_iface = 1      # 入口网卡 lo (ifindex 1)
-egress_iface = 1       # 出口网卡 lo
-
-# 出口网卡的公网 IP 列表
-egress_ips = [
-    "192.168.56.103",    # eth2 的第1个公网 IP
-    "192.168.56.104",    # eth2 的第2个公网 IP
-]
-
-
+[vpn]
+port = 18080
+egress_ips = ["192.168.75.191"]

@@ -3,3 +3,11 @@ ebpf-vpn
 .vscode
 go.sum
 *.pcap
+*.pcapng
+*.log
+/xdp-loader
+/icmp-vpn-client
+/simple-vpn-server
+/cmd/*/*-vpn-client
+/cmd/*/xdp-loader
+/cmd/*/main

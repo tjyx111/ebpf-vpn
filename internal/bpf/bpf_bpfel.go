@@ -61,21 +61,14 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	CaptureRuleMap   *ebpf.MapSpec `ebpf:"capture_rule_map"`
-	DnatMap          *ebpf.MapSpec `ebpf:"dnat_map"`
-	EventsRingbuf    *ebpf.MapSpec `ebpf:"events_ringbuf"`
-	FilterRuleMap    *ebpf.MapSpec `ebpf:"filter_rule_map"`
-	LogEvents        *ebpf.MapSpec `ebpf:"log_events"`
-	SnatMap          *ebpf.MapSpec `ebpf:"snat_map"`
 	UnifiedConfigMap *ebpf.MapSpec `ebpf:"unified_config_map"`
-	XsksMap          *ebpf.MapSpec `ebpf:"xsks_map"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
-	ConfigPrinted *ebpf.VariableSpec `ebpf:"config_printed"`
+	StatCounters *ebpf.VariableSpec `ebpf:"stat_counters"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -98,26 +91,12 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	CaptureRuleMap   *ebpf.Map `ebpf:"capture_rule_map"`
-	DnatMap          *ebpf.Map `ebpf:"dnat_map"`
-	EventsRingbuf    *ebpf.Map `ebpf:"events_ringbuf"`
-	FilterRuleMap    *ebpf.Map `ebpf:"filter_rule_map"`
-	LogEvents        *ebpf.Map `ebpf:"log_events"`
-	SnatMap          *ebpf.Map `ebpf:"snat_map"`
 	UnifiedConfigMap *ebpf.Map `ebpf:"unified_config_map"`
-	XsksMap          *ebpf.Map `ebpf:"xsks_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
-		m.CaptureRuleMap,
-		m.DnatMap,
-		m.EventsRingbuf,
-		m.FilterRuleMap,
-		m.LogEvents,
-		m.SnatMap,
 		m.UnifiedConfigMap,
-		m.XsksMap,
 	)
 }
 
@@ -125,7 +104,7 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
-	ConfigPrinted *ebpf.Variable `ebpf:"config_printed"`
+	StatCounters *ebpf.Variable `ebpf:"stat_counters"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.

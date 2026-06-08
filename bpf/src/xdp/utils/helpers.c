@@ -2,9 +2,9 @@
 
 /**
  * Swaps the Ethernet source and destination MAC addresses.
- * 
+ *
  * @param eth A pointer to the Ethernet header (ethhdr) struct that points to the Ethernet header within the packet.
- * 
+ *
  * @return void
  */
 static __always_inline void swap_eth(struct ethhdr* eth)
