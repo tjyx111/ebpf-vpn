@@ -2,8 +2,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -18,6 +20,12 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+const (
+	ipLocalPortRangeKey   = "net.ipv4.ip_local_port_range"
+	ipLocalPortRangeValue = "50001 60000"
+	sysctlPersistPath     = "/etc/sysctl.d/99-ebpf-vpn.conf"
+)
+
 var (
 	ifaceName     = flag.String("iface", "eth0", "Network interface(s) to attach XDP program, comma-separated")
 	configPath    = flag.String("config", "config.toml", "Path to configuration file")
@@ -30,6 +38,10 @@ func main() {
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
+	if err := ensureSystemPortRange(); err != nil {
+		log.Fatalf("Failed to configure system port range: %v", err)
+	}
+
 	cfg, err := config.LoadFromFile(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -41,13 +53,13 @@ func main() {
 	}
 	defer program.Close()
 
-	if err := cfg.UnifiedConfig.SyncToMap(program.UnifiedConfigMap()); err != nil {
+	if err := cfg.UnifiedConfig.SyncToMaps(program.UnifiedConfigMap(), program.EgressIPMap()); err != nil {
 		log.Fatalf("Failed to sync config: %v", err)
 	}
 	logConfig("Loaded config", cfg)
 
 	stopWatcher := make(chan struct{})
-	go watchConfig(*configPath, program.UnifiedConfigMap(), stopWatcher)
+	go watchConfig(*configPath, program.UnifiedConfigMap(), program.EgressIPMap(), stopWatcher)
 	defer close(stopWatcher)
 
 	statsReporter := stats.NewReporter(program, *statusFile, *statsInterval)
@@ -73,7 +85,21 @@ func main() {
 	log.Println("Shutting down...")
 }
 
-func watchConfig(path string, configMap *ebpf.Map, stop chan struct{}) {
+func ensureSystemPortRange() error {
+	persistConfig := ipLocalPortRangeKey + " = " + ipLocalPortRangeValue + "\n"
+	if err := os.WriteFile(sysctlPersistPath, []byte(persistConfig), 0644); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("sysctl", "-w", ipLocalPortRangeKey+"="+ipLocalPortRangeValue)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, string(output))
+	}
+	log.Printf("Configured %s=%s", ipLocalPortRangeKey, ipLocalPortRangeValue)
+	return nil
+}
+
+func watchConfig(path string, configMap *ebpf.Map, egressIPMap *ebpf.Map, stop chan struct{}) {
 	configPath, err := filepath.Abs(path)
 	if err != nil {
 		log.Printf("Failed to resolve config path: %v", err)
@@ -113,7 +139,7 @@ func watchConfig(path string, configMap *ebpf.Map, stop chan struct{}) {
 				log.Printf("Failed to reload config: %v", err)
 				continue
 			}
-			if err := cfg.UnifiedConfig.SyncToMap(configMap); err != nil {
+			if err := cfg.UnifiedConfig.SyncToMaps(configMap, egressIPMap); err != nil {
 				log.Printf("Failed to sync config: %v", err)
 				continue
 			}

@@ -62,7 +62,10 @@ type bpfProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
 	DnatCaptureEvents *ebpf.MapSpec `ebpf:"dnat_capture_events"`
+	EgressIpMap       *ebpf.MapSpec `ebpf:"egress_ip_map"`
 	IcmpDnatMap       *ebpf.MapSpec `ebpf:"icmp_dnat_map"`
+	L4DnatMap         *ebpf.MapSpec `ebpf:"l4_dnat_map"`
+	L4SnatMap         *ebpf.MapSpec `ebpf:"l4_snat_map"`
 	UnifiedConfigMap  *ebpf.MapSpec `ebpf:"unified_config_map"`
 }
 
@@ -94,14 +97,20 @@ func (o *bpfObjects) Close() error {
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
 	DnatCaptureEvents *ebpf.Map `ebpf:"dnat_capture_events"`
+	EgressIpMap       *ebpf.Map `ebpf:"egress_ip_map"`
 	IcmpDnatMap       *ebpf.Map `ebpf:"icmp_dnat_map"`
+	L4DnatMap         *ebpf.Map `ebpf:"l4_dnat_map"`
+	L4SnatMap         *ebpf.Map `ebpf:"l4_snat_map"`
 	UnifiedConfigMap  *ebpf.Map `ebpf:"unified_config_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.DnatCaptureEvents,
+		m.EgressIpMap,
 		m.IcmpDnatMap,
+		m.L4DnatMap,
+		m.L4SnatMap,
 		m.UnifiedConfigMap,
 	)
 }

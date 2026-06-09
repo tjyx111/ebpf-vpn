@@ -25,9 +25,9 @@ type VPNHeader struct {
 
 func main() {
 	// 命令行参数
-	vpnServer := flag.String("vpn-server", "127.0.0.1:18080", "VPN 服务器地址 (IP:Port)")
+	vpnServer := flag.String("vpn-server", "192.168.56.103:17878", "VPN 服务器地址 (IP:Port)")
 	targetIP := flag.String("target", "8.8.8.8", "目标 IP 地址")
-	sourceIP := flag.String("source", "192.168.1.100", "源 IP 地址 (内层 IP)")
+	sourceIP := flag.String("source", "10.192.1.1", "源 IP 地址 (内层 IP)")
 	sessionID := flag.Uint("session-id", 12345, "Session ID")
 	timeout := flag.Duration("timeout", 5*time.Second, "等待响应的超时时间")
 	count := flag.Int("count", 1, "发送包的数量 (0 表示持续发送)")
@@ -103,7 +103,8 @@ func main() {
 		if err != nil {
 			log.Printf("[%d] 读取响应失败: %v", i+1, err)
 			fmt.Println()
-			fmt.Println("注意: 请检查 XDP loader 的输出和 status.log 中的 VPN 统计")
+			fmt.Println("注意: 如果 XDP 程序正确处理了 SNAT，应该能看到相关日志输出")
+			fmt.Println("请检查 'sudo cat /sys/kernel/debug/tracing/trace_pipe' 的输出")
 			continue
 		}
 

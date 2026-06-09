@@ -2,8 +2,10 @@
 
 # 变量定义
 BINARY_NAME = ebpf-vpn
+CLIENT_BINARY_NAME = vpn-tun-client
 BPF_DIR = internal/bpf
 CMD_DIR = cmd/xdp-loader
+CLIENT_CMD_DIR = cmd/vpn-tun-client
 GO = go
 CLANG = clang
 
@@ -15,7 +17,7 @@ help:
 	@echo "ebpf-vpn Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build        - 编译 eBPF 程序和 Go 程序"
+	@echo "  make build        - 编译 eBPF 程序、loader 和客户端"
 	@echo "  make bpf          - 仅编译 eBPF 程序"
 	@echo "  make go           - 仅编译 Go 程序"
 	@echo "  make clean        - 清理所有编译产物"
@@ -27,8 +29,8 @@ help:
 	@echo "  make run          # 编译并运行 (使用默认配置)"
 
 .PHONY: build
-build: bpf go
-	@echo "编译完成: $(BINARY_NAME)"
+build: bpf go client
+	@echo "编译完成: $(BINARY_NAME), $(CLIENT_BINARY_NAME)"
 
 .PHONY: bpf
 bpf:
@@ -42,10 +44,17 @@ go:
 	$(GO) build -o $(BINARY_NAME) ./$(CMD_DIR)/
 	@echo "Go 程序编译完成"
 
+.PHONY: client
+client:
+	@echo "编译 VPN TUN 客户端..."
+	cd $(CLIENT_CMD_DIR) && $(GO) build -o ../../$(CLIENT_BINARY_NAME) .
+	@echo "VPN TUN 客户端编译完成"
+
 .PHONY: clean
 clean:
 	@echo "清理编译产物..."
 	rm -f $(BINARY_NAME)
+	rm -f $(CLIENT_BINARY_NAME)
 	rm -f $(BPF_DIR)/bpf_bpfeb.o
 	rm -f $(BPF_DIR)/bpf_bpfel.o
 	rm -f $(BPF_DIR)/bpf_bpfeb.go

@@ -1,7 +1,7 @@
 *.o
 ebpf-vpn
+/vpn-tun-client
 .vscode
-go.sum
 *.pcap
 *.pcapng
 *.log

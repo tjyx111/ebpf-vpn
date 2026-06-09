@@ -89,6 +89,11 @@ func (p *Program) UnifiedConfigMap() *ebpf.Map {
 	return p.objs.UnifiedConfigMap
 }
 
+// EgressIPMap 获取排序后的 egress IP 查找 Map。
+func (p *Program) EgressIPMap() *ebpf.Map {
+	return p.objs.EgressIpMap
+}
+
 // DnatCaptureEvents 获取 DNAT 回包抓包 ringbuf。
 func (p *Program) DnatCaptureEvents() *ebpf.Map {
 	return p.objs.DnatCaptureEvents

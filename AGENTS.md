@@ -10,22 +10,25 @@ Codex should treat this file as the durable project instruction source. Keep it 
 
 ICMP NAT forwarding precursor is validated.
 
-Known-good runtime config:
+VPN TUN client continuous traffic generator is implemented.
+
+Current local runtime config:
 
 ```toml
 [network]
-udp_echo_port = 28080
+udp_echo_port = 18080
 mtu = 1500
 
 [features]
 udp_echo_enabled = true
+dnat_capture_enabled = true
 
 [vpn]
-port = 18080
-egress_ips = ["192.168.75.191"]
+port = 17878
+egress_interfaces = ["enp0s17"]
 ```
 
-Validated path:
+Previously validated ICMP path:
 
 - Ingress interface: `enp0s8`
 - Ingress IP: `192.168.56.103`
@@ -67,6 +70,7 @@ Validated path:
   - UDP echo path.
   - VPN ICMP SNAT path.
   - ICMP DNAT return encapsulation path.
+  - Experimental TCP/UDP L4 SNAT/DNAT path with fixed NAT port pool.
 
 - `bpf/src/xdp/common/unified_config.h`
   - Shared BPF config layout.
@@ -74,7 +78,19 @@ Validated path:
   - Counter indexes.
 
 - `cmd/icmp-vpn-client/main.go`
-  - Test client for VPN-encapsulated ICMP.
+  - Removed legacy ICMP-only test client.
+
+- `cmd/vpn-tun-client/main.go`
+  - gVisor netstack client for TCP/UDP tests over VPN UDP encapsulation.
+  - Allocates one local app-netstack IP and VPN session per worker.
+  - Runs continuously until `-duration` expires or the process receives a stop signal.
+  - Sends at `-send-interval` per worker.
+  - Uses shared atomic `trafficCounters` for Tx/Rx/error totals.
+  - Logs 1-second Tx/Rx/error deltas plus min/max TTL derived from echoed payload timestamps.
+
+- `vpn-cli.go`
+  - Standalone ICMP VPN packet helper.
+  - Not built by `make build`.
 
 ## Implemented
 
@@ -98,17 +114,30 @@ Validated path:
 - DNAT pcap capture:
   - `-dnat-pcap=<path>` writes re-encapsulated DNAT packets to pcap.
   - `./run.sh` writes `dnat-icmp-reply.pcap`.
+- Experimental TCP/UDP L4 NAT:
+  - Uses `l4_snat_map` and `l4_dnat_map`.
+  - Allocates external ports from BPF constants `NAT_PORT_START=20000` through `NAT_PORT_END=50000`.
+  - Tracks `STAT_VPN_L4_SNAT_COUNT`, `STAT_VPN_L4_DNAT_COUNT`, `STAT_VPN_PORT_ALLOC_MISS_COUNT`, `STAT_VPN_FRAGMENT_PASS_COUNT`, and `STAT_VPN_MTU_PASS_COUNT`.
+  - This is not yet a complete general NAT milestone.
+- VPN TUN client:
+  - `cmd/vpn-tun-client` supports `-mode=tcp|udp`.
+  - `-duration=<dur>` is required and controls process lifetime.
+  - `-workers=<n>` starts parallel app-netstack workers.
+  - `-send-interval=<dur>` controls per-worker send pacing; `0` sends as fast as possible.
+  - `-read-response` enables response reads and TTL measurement.
+  - Runtime stats log every second as `counter_delta interval=1s tx=<n> rx=<n> errors=<n> ttl_min=<dur> ttl_max=<dur>`.
+  - `make build` builds the loader and root `./vpn-tun-client` binary.
 
 ## Not Implemented Yet
 
 - Session map.
 - ICMP ID translation.
-- TCP/UDP NAT.
-- Port allocation.
+- TCP/UDP NAT validation.
+- Configurable port allocation policy.
 - Timeout cleanup.
 
-Do not claim general NAT forwarding is complete until TCP/UDP NAT, port allocation,
-and timeout cleanup are implemented.
+Do not claim general NAT forwarding is complete until TCP/UDP NAT is validated,
+configurable port allocation policy is implemented, and timeout cleanup exists.
 
 ## Required Commands
 
@@ -123,6 +152,12 @@ Before reporting implementation complete:
 ```bash
 go test ./...
 make build
+```
+
+For the VPN TUN client submodule, also run:
+
+```bash
+cd cmd/vpn-tun-client && go test ./...
 ```
 
 For datapath changes, also load the XDP program at least once. Compile success is not enough; verifier/load success matters.
@@ -197,6 +232,12 @@ sudo sh -c '
 echo 0 > /sys/kernel/debug/tracing/events/xdp/xdp_redirect/enable
 echo 0 > /sys/kernel/debug/tracing/events/xdp/xdp_redirect_err/enable
 '
+```
+
+Run the VPN TUN client:
+
+```bash
+./vpn-tun-client -mode=udp -duration=30s -workers=4 -send-interval=10ms
 ```
 
 ## Future Port Allocation Direction

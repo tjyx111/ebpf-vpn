@@ -28,6 +28,21 @@ static __always_inline int inc_pkt_stats(STATS_TYPE_T type)
         case STATS_TYPE_VPN_ICMP_DNAT_MISS:
             index = STAT_VPN_ICMP_DNAT_MISS_COUNT;
             break;
+        case STATS_TYPE_VPN_L4_SNAT:
+            index = STAT_VPN_L4_SNAT_COUNT;
+            break;
+        case STATS_TYPE_VPN_L4_DNAT:
+            index = STAT_VPN_L4_DNAT_COUNT;
+            break;
+        case STATS_TYPE_VPN_FRAGMENT_PASS:
+            index = STAT_VPN_FRAGMENT_PASS_COUNT;
+            break;
+        case STATS_TYPE_VPN_MTU_PASS:
+            index = STAT_VPN_MTU_PASS_COUNT;
+            break;
+        case STATS_TYPE_VPN_PORT_ALLOC_MISS:
+            index = STAT_VPN_PORT_ALLOC_MISS_COUNT;
+            break;
         case STATS_TYPE_XDP_PASS:
             index = STAT_XDP_PASS_COUNT;
             break;
@@ -63,6 +78,12 @@ static __always_inline int inc_pkt_stats(STATS_TYPE_T type)
             break;
         case STATS_TYPE_VPN_DNAT_FIB_LOOKUP_ERROR:
             index = STAT_VPN_DNAT_FIB_LOOKUP_ERROR_COUNT;
+            break;
+        case STATS_TYPE_NON_IPV4_PASS:
+            index = STAT_NON_IPV4_PASS_COUNT;
+            break;
+        case STATS_TYPE_IPV4_FRAGMENT_PASS:
+            index = STAT_IPV4_FRAGMENT_PASS_COUNT;
             break;
     }
 
